@@ -19,3 +19,30 @@ Results/
 # Temporary files
 *.tmp
 *.bak
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# Finder / Spotlight
+.Spotlight-V100
+.Trashes
+.fseventsd
+
+# R / RStudio
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+
+# Generated outputs
+Results/
+
+# Logs/temp
+*.log
+*.tmp
+*.bak
+*.swp
+*~

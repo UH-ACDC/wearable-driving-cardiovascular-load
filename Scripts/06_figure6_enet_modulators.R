@@ -1,63 +1,89 @@
 # ============================================================
-# Figure6_ENet_Modulators_v12.R  (FULL REPLACEMENT)
+# 06_figure6_enet_modulators.R
 #
 # PURPOSE
-#   Build Figure 6 for the paper:
-#   "ENet modulators beyond baseline and context-level tax"
+#   Generate Figure 6 for the npj Digital Medicine manuscript:
 #
-# FIGURE PANELS (2 x 2)
-#   A. Grouped feature importance by stratum
-#      (excluding baseline-dominant terms)
+#     From Instantaneous Heart Rate to Long-Horizon
+#     Cardiovascular Burden in Naturalistic Daily Life
 #
-#   B. Signed coefficients for interpretable terms
-#      (sex / day / period-of-day / driving weather / workload / personality)
+#   The script visualizes non-physiological ENet modulators of
+#   heart rate beyond participant baseline and the context-level
+#   cardiovascular tax.
 #
-#   C. Top continuous modulators
-#      shown as coefficient-implied effect curves
+# ANALYTIC DEFINITION
+#   Figure 6 summarizes the additional structure captured by the
+#   ENet model after accounting for:
 #
-#   D. ENet gain beyond baseline+offset
-#      (Delta RMSE, Delta R^2)
+#     baseline0
+#       Person-specific baseline heart rate
 #
-# INPUTS
+#     baseline_offset
+#       Person baseline plus context-level tax
+#       - driving: driving tax
+#       - non-driving sedentary: daily-living tax
+#
+#   The ENet model captures additional modulation by observed
+#   covariates such as temporal context, weather, workload,
+#   personality traits, and driving dynamics.
+#
+# PANEL DEFINITIONS
+#   A. Grouped ENet feature importance beyond baseline+tax
+#   B. Signed standardized coefficients for interpretable predictors
+#   C. Top continuous modulators shown as coefficient-implied effects
+#   D. Incremental ENet gain beyond baseline+tax
+#
+# INPUT
 #   1) Final clean MASTER dataset:
+#
 #        Data/NUBI_Data_<RES>sec_Level_MASTER_CLEAN.csv
 #
 #   2) Existing ML output folder under:
+#
 #        Results/nubi_ml/<RUN_FOLDER>/
 #
 #      Expected files:
+#
 #        feature_importance_grouped_DRIVING.csv
 #        feature_importance_grouped_NONDRIVING_SEDENTARY.csv
 #        feature_importance_terms_DRIVING.csv
 #        feature_importance_terms_NONDRIVING_SEDENTARY.csv
 #        compare_metrics_rawhr_overall_by_stratum.csv
 #
-# OUTPUT
-#   Results/paper_figs/<STAMP>_<RES>sec_Figure6_ENet_Modulators/
-#      Figure6_ENet_Modulators.pdf
-#      Figure6_ENet_Modulators.png
-#      diagnostics_summary.txt
-#      diag_counts_by_stratum.csv
-#      diag_panelA_grouped_features.csv
-#      diag_panelB_terms.csv
-#      diag_panelC_selected_modulators.csv
-#      diag_panelC_effect_curves.csv
-#      diag_panelD_incremental_gain.csv
+# MAJOR OUTPUTS
+#   The script writes Figure 6 and supporting diagnostics under:
+#
+#     Results/paper_figs/<timestamp>_<RES>sec_figure6_enet_modulators/
+#
+#   Main outputs:
+#
+#     Figure6_ENet_Modulators.pdf
+#     Figure6_ENet_Modulators.png
+#     diagnostics_summary.txt
+#     diag_counts_by_stratum.csv
+#     diag_panelA_grouped_features.csv
+#     diag_panelB_terms.csv
+#     diag_panelC_selected_modulators.csv
+#     diag_panelC_effect_curves.csv
+#     diag_panelD_incremental_gain.csv
+#
+# REPOSITORY SCOPE
+#   This public repository starts from curated model outputs and
+#   the final clean MASTER dataset. It does not retrain the full
+#   upstream machine-learning pipeline from raw wearable,
+#   smartphone, vehicle, or ground-truth streams.
+#
+# PRIVACY NOTE
+#   This script uses curated features and model summaries. It does
+#   not require direct GPS coordinates or raw location traces.
 #
 # NOTES
-#   - Relative directory structure assumed:
-#       project_root/
-#         Scripts/
-#         Data/
-#         Results/
-#            nubi_ml/
-#            paper_figs/
-#   - This script assumes the ENet outputs were fit to direct RAW_HR.
-#   - Panel C is a coefficient-implied linear effect summary, not a PDP/ALE.
-#   - Aligned with v12 upstream ML script:
-#       weather_info is treated as DRIVING-specific and excluded from
-#       NONDRIVING_SEDENTARY displays as a defensive guard.
-#   - Display labels are cleaned for paper consistency:
+#   - The ENet outputs are assumed to have been fit to direct RAW_HR.
+#   - Panel C is a coefficient-implied linear effect summary, not
+#     a PDP or ALE curve.
+#   - Weather terms are treated as DRIVING-specific and excluded
+#     from NONDRIVING_SEDENTARY displays as a defensive guard.
+#   - Display labels are cleaned for manuscript consistency:
 #       weather_info_other -> adverse_weather
 # ============================================================
 
@@ -70,8 +96,6 @@ suppressPackageStartupMessages({
   library(dplyr)
   library(tidyr)
   library(stringr)
-  library(forcats)
-  library(scales)
   library(patchwork)
 })
 
@@ -83,11 +107,14 @@ set.seed(20260309)
 # ============================================================
 LOCAL_TZ <- "America/Chicago"
 
-# Use exact folder name inside Results/nubi_ml, or leave NULL to auto-pick
+# Use exact folder name inside Results/nubi_ml, or leave NULL to auto-pick.
+# For manuscript reproduction, the auto-picker searches for the final
+# direct-RAW_HR ENet importance run.
 RUN_DIR_NAME <- NULL
 
-# Optional extra filter when auto-picking; usually leave blank
-RUN_DIR_SUFFIX_REGEX <- "v12_00_compare_drive_vs_nondrive_directRAWHR_MASTER_NOAFFINE_IMPORTANCE"
+# Optional extra filter when auto-picking. Leave blank for public GitHub use,
+# because downloaded/copied run folders may have different timestamped names.
+RUN_DIR_SUFFIX_REGEX <- ""
 
 TOPK_GROUPED  <- 12L
 TOPK_TERMS    <- 14L
@@ -419,6 +446,14 @@ pretty_stratum <- function(x) {
 # ============================================================
 # LOCATE RUN FOLDER + RESOLUTION
 # ============================================================
+required_fig6_files <- c(
+  "feature_importance_grouped_DRIVING.csv",
+  "feature_importance_grouped_NONDRIVING_SEDENTARY.csv",
+  "feature_importance_terms_DRIVING.csv",
+  "feature_importance_terms_NONDRIVING_SEDENTARY.csv",
+  "compare_metrics_rawhr_overall_by_stratum.csv"
+)
+
 auto_pick_run_dir <- function(project_root, suffix_regex = "") {
   base <- file.path(project_root, "Results", "nubi_ml")
   if (!dir.exists(base)) stop("Missing folder: ", base)
@@ -426,22 +461,28 @@ auto_pick_run_dir <- function(project_root, suffix_regex = "") {
   cand <- list.dirs(base, recursive = FALSE, full.names = TRUE)
   cand <- cand[file.info(cand)$isdir %in% TRUE]
   
-  bn <- basename(cand)
-  
-  keep <- grepl("compare_drive", bn, ignore.case = TRUE) &
-    grepl("directRAWHR", bn, ignore.case = TRUE) &
-    grepl("NOAFFINE_IMPORTANCE", bn, ignore.case = TRUE)
-  
-  if (!is.null(suffix_regex) && nzchar(suffix_regex)) {
-    keep <- keep & grepl(suffix_regex, bn, ignore.case = TRUE)
+  if (length(cand) == 0) {
+    stop("No run folders found under: ", base)
   }
   
-  cand <- cand[keep]
+  has_required <- vapply(
+    cand,
+    function(d) all(file.exists(file.path(d, required_fig6_files))),
+    logical(1)
+  )
+  
+  cand <- cand[has_required]
+  
+  if (!is.null(suffix_regex) && nzchar(suffix_regex)) {
+    cand <- cand[grepl(suffix_regex, basename(cand), ignore.case = TRUE)]
+  }
   
   if (length(cand) == 0) {
     stop(
-      "Could not find a matching ML run folder under Results/nubi_ml/.\n",
-      "Available folders:\n  ",
+      "Could not find an ML run folder under Results/nubi_ml/ containing all Figure 6 inputs.\n",
+      "Required files:\n  ",
+      paste(required_fig6_files, collapse = "\n  "),
+      "\n\nAvailable folders:\n  ",
       paste(basename(list.dirs(base, recursive = FALSE, full.names = TRUE)), collapse = "\n  ")
     )
   }
@@ -470,7 +511,11 @@ RES_SECONDS <- as.integer(m[1, 2])
 message("Parsed RES_SECONDS = ", RES_SECONDS)
 
 STAMP <- format(Sys.time(), "%Y%m%d_%H%M%S")
-fig_subdir_name <- sprintf("%s_%dsec_Figure6_ENet_Modulators", STAMP, RES_SECONDS)
+fig_subdir_name <- sprintf(
+  "%s_%dsec_figure6_enet_modulators",
+  STAMP,
+  RES_SECONDS
+)
 fig_out_dir <- file.path(paper_fig_root, fig_subdir_name)
 dir.create(fig_out_dir, recursive = TRUE, showWarnings = FALSE)
 
@@ -573,8 +618,6 @@ if (length(have_dyn) > 0) {
 keep_common_names <- union(names(dt_drive), names(dt_nond))
 for (nm in setdiff(keep_common_names, names(dt_nond))) dt_nond[, (nm) := NA]
 for (nm in setdiff(keep_common_names, names(dt_drive))) dt_drive[, (nm) := NA]
-
-dt_model <- rbindlist(list(dt_drive, dt_nond), use.names = TRUE, fill = TRUE)
 
 # ============================================================
 # DIAGNOSTIC COUNTS
@@ -945,13 +988,13 @@ pD <- ggplot(
 # ============================================================
 # COMPOSE FIGURE
 # ============================================================
-fig7 <- (pA | pB) / (pC | pD)
+fig6 <- (pA | pB) / (pC | pD)
 
 out_pdf <- file.path(fig_out_dir, "Figure6_ENet_Modulators.pdf")
 out_png <- file.path(fig_out_dir, "Figure6_ENet_Modulators.png")
 
-ggsave(out_pdf, fig7, width = 14, height = 10, device = grDevices::cairo_pdf)
-ggsave(out_png, fig7, width = 14, height = 10, dpi = 300)
+ggsave(out_pdf, fig6, width = 14, height = 10, device = grDevices::cairo_pdf)
+ggsave(out_png, fig6, width = 14, height = 10, dpi = 300)
 
 # ============================================================
 # WRITE DIAGNOSTICS

@@ -1,45 +1,69 @@
 # ============================================================
-# Figure2.R  (FULL REPLACEMENT — FINAL MASTER DATASET VERSION)
+# 02_figure2_representative_trace.R
 #
 # PURPOSE
-#   Produces a single-subject paper figure for SUBJECT_ID
-#   from one of the FINAL validated multi-resolution datasets:
-#     - Data/NUBI_Data_10sec_Level_MASTER_CLEAN.csv
-#     - Data/NUBI_Data_30sec_Level_MASTER_CLEAN.csv
-#     - Data/NUBI_Data_60sec_Level_MASTER_CLEAN.csv
+#   Generate Figure 2 for the npj Digital Medicine manuscript:
+#
+#     From Instantaneous Heart Rate to Long-Horizon
+#     Cardiovascular Burden in Naturalistic Daily Life
+#
+#   The script creates a representative single-participant
+#   heart-rate trace across study days 1-7.
 #
 #   Plot contents:
-#     - Raw HR colored by activity3:
-#         driving                         -> orange
-#         non_driving_sedentary          -> black
-#         non_driving_physical_activity  -> springgreen3
-#     - Baseline HR (bl_hr) shown in red
-#
-# X-axis
-#   STUDY-DAY placement over a fixed 7-slot layout:
-#     day1 = slot 1 (0-24h), day2 = slot 2 (24-48h), ..., day7 = slot 7
-#
-# IMPORTANT
-#   - Uses FINAL MASTER datasets, not old *_HRBL_CLEANED_v2 files.
-#   - Uses activity3 directly (no heuristic parsing from data_source).
-#   - Uses day_num as the PRIMARY study-day key.
-#   - Day1..Day7 are weekday-coded study-day labels, NOT necessarily
-#     consecutive calendar dates.
-#   - Missing grid points are inserted within each study-day slot based on
-#     the chosen resolution so line breaks appear correctly.
+#     - raw heart rate colored by activity context:
+#         driving
+#         non_driving_sedentary
+#         non_driving_physical_activity
+#     - participant-day baseline heart rate overlaid in red
 #
 # INPUT
-#   <ProjectRoot>/Data/NUBI_Data_<RES>sec_Level_MASTER_CLEAN.csv
+#   Data/NUBI_Data_60sec_Level_MASTER_CLEAN.csv
 #
-# OUTPUT
-#   <ProjectRoot>/Results/paper_figs/<timestamp>_<RES>sec_Figure2_<SUBJECT_ID>/
-#       Figures/Figure2_<SUBJECT_ID>.pdf
-#       Figures/Figure2_<SUBJECT_ID>.png
-#       activity3_levels_detected.csv
-#       counts_<SUBJECT_ID>.csv
-#       subject_summary_<SUBJECT_ID>.csv
-#       baseline_study_day_<SUBJECT_ID>.csv
-#       run_log.txt
+# DEFAULT SUBJECT
+#   SUBJECT_ID <- "P62"
+#
+# REQUIRED ACTIVITY LABELS
+#   activity3 == "driving"
+#   activity3 == "non_driving_sedentary"
+#   activity3 == "non_driving_physical_activity"
+#
+# X-AXIS
+#   Study-day placement over a fixed 7-slot layout:
+#
+#     day 1 = 0-24 h
+#     day 2 = 24-48 h
+#     ...
+#     day 7 = 144-168 h
+#
+#   The day_num variable is used as the study-day key.
+#   These study-day labels are not necessarily consecutive
+#   calendar dates.
+#
+# MAJOR OUTPUTS
+#   The script writes Figure 2 and subject-level diagnostics under:
+#
+#     Results/paper_figs/<timestamp>_60sec_figure2_<SUBJECT_ID>/
+#
+#   Main outputs:
+#
+#     Figures/Figure2_<SUBJECT_ID>.pdf
+#     Figures/Figure2_<SUBJECT_ID>.png
+#     activity3_levels_detected.csv
+#     counts_<SUBJECT_ID>.csv
+#     subject_summary_<SUBJECT_ID>.csv
+#     baseline_study_day_<SUBJECT_ID>.csv
+#     missingness_after_fill_<SUBJECT_ID>.csv
+#     run_log.txt
+#
+# REPOSITORY SCOPE
+#   This public repository starts from the curated analysis-ready
+#   60-second dataset. It does not reconstruct the dataset from
+#   raw wearable, smartphone, vehicle, or ground-truth streams.
+#
+# PRIVACY NOTE
+#   Direct GPS coordinate columns are removed from the public
+#   dataset and are not required for this figure.
 # ============================================================
 
 suppressPackageStartupMessages({
@@ -94,32 +118,53 @@ this_script <- tryCatch(normalizePath(sys.frame(1)$ofile), error = function(e) N
 if (!is.na(this_script) && file.exists(this_script)) setwd(dirname(this_script))
 message("Working directory (Scripts): ", getwd())
 
-project_root <- normalizePath(file.path(getwd(), ".."), mustWork = FALSE)
+project_root <- normalizePath(file.path(getwd(), ".."), mustWork = TRUE)
 
 # ----------------------------
 # Resolution picker
 # ----------------------------
-pick_resolution <- function() {
-  cat("\nChoose dataset resolution:\n",
-      "  1) 10 sec\n",
-      "  2) 30 sec\n",
-      "  3) 60 sec\n", sep = "")
-  ans <- readline("Enter 10 / 30 / 60 (or 1/2/3): ")
-  ans <- trimws(ans)
+# The public repository currently includes the curated 60-second dataset:
+#
+#   Data/NUBI_Data_60sec_Level_MASTER_CLEAN.csv
+#
+# The picker is retained so the same script can be reused if 10-sec or
+# 30-sec analysis datasets are added later.
+
+pick_resolution <- function(default = 60L) {
+  cat(
+    "\nChoose dataset resolution:\n",
+    "  1) 10 sec  [requires Data/NUBI_Data_10sec_Level_MASTER_CLEAN.csv]\n",
+    "  2) 30 sec  [requires Data/NUBI_Data_30sec_Level_MASTER_CLEAN.csv]\n",
+    "  3) 60 sec  [included in this repository]\n",
+    sep = ""
+  )
   
-  if (ans %in% c("1","10")) return(10L)
-  if (ans %in% c("2","30")) return(30L)
-  if (ans %in% c("3","60")) return(60L)
+  ans <- trimws(readline(
+    sprintf("Enter 10 / 30 / 60 (or 1/2/3). Press Enter for %d sec: ", default)
+  ))
   
-  stop("Invalid entry: ", ans, "  (expected 10/30/60 or 1/2/3)")
+  if (ans == "") return(as.integer(default))
+  if (ans %in% c("1", "10")) return(10L)
+  if (ans %in% c("2", "30")) return(30L)
+  if (ans %in% c("3", "60")) return(60L)
+  
+  stop("Invalid entry: ", ans, " (expected 10/30/60 or 1/2/3)")
 }
-RES_SECONDS <- pick_resolution()
+
+RES_SECONDS <- pick_resolution(default = 60L)
 
 in_path <- file.path(
   project_root, "Data",
   sprintf("NUBI_Data_%dsec_Level_MASTER_CLEAN.csv", RES_SECONDS)
 )
-stopifnot(file.exists(in_path))
+if (!file.exists(in_path)) {
+  stop(
+    "Dataset not found: ", in_path, "\n",
+    "The public repository currently includes only the 60-second dataset. ",
+    "Use 60 sec, or add the corresponding ", RES_SECONDS,
+    "-second dataset under Data/."
+  )
+}
 
 gap_threshold_secs <- as.integer(GAP_MULT * RES_SECONDS)
 
@@ -128,8 +173,10 @@ gap_threshold_secs <- as.integer(GAP_MULT * RES_SECONDS)
 # ----------------------------
 stamp   <- format(Sys.time(), "%Y%m%d_%H%M%S")
 out_dir <- file.path(
-  project_root, "Results", "paper_figs",
-  paste0(stamp, "_", RES_SECONDS, "sec_Figure2_", SUBJECT_ID)
+  project_root,
+  "Results",
+  "paper_figs",
+  paste0(stamp, "_", RES_SECONDS, "sec_figure2_", SUBJECT_ID)
 )
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
@@ -351,7 +398,8 @@ make_subject_plot <- function(dsub) {
 # Main
 # ----------------------------
 main <- function() {
-  log_msg("Figure2 subject plot start")
+  log_msg("Script: 02_figure2_representative_trace.R")
+  log_msg("Figure 2 subject plot start")
   log_msg("Subject: ", SUBJECT_ID)
   log_msg("Resolution: ", RES_SECONDS, " sec")
   log_msg("Input: ", in_path)

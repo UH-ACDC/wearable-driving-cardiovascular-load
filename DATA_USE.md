@@ -1,6 +1,6 @@
 # Data Use
 
-This repository includes the curated 60-second analysis dataset used to reproduce the analyses, figures, tables, and supplementary participant traces for the associated manuscript:
+This repository includes the curated 60-second analysis dataset used to reproduce the manuscript analyses, figures, tables, and supplementary participant traces for:
 
 **From Instantaneous Heart Rate to Long-Horizon Cardiovascular Burden in Naturalistic Daily Life**
 
@@ -9,6 +9,8 @@ The released dataset is:
 ```text
 Data/NUBI_Data_60sec_Level_MASTER_CLEAN.csv
 ```
+
+The analysis scripts may include interactive options for 10-, 30-, and 60-second resolutions. In the public repository, the 60-second dataset is the manuscript/public-release default. The 10- and 30-second options are intended only for users who have access to matching curated MASTER datasets and matching model-output folders.
 
 ## Intended use
 

@@ -1,39 +1,101 @@
 # ============================================================
-# Fig_Supplement_Activity3_MultiRes.R  (FULL REPLACEMENT)
+# Fig_Supplement_Activity3_MultiRes.R
 #
 # PURPOSE
-#   Multipage supplementary figure from one of:
+#   Generate a multipage supplementary figure for the npj Digital
+#   Medicine manuscript:
+#
+#     From Instantaneous Heart Rate to Long-Horizon
+#     Cardiovascular Burden in Naturalistic Daily Life
+#
+#   The figure visualizes participant-level heart-rate time series
+#   across the 7 study-day slots, with raw HR colored by activity3
+#   state and baseline HR overlaid.
+#
+# DATA SOURCE
+#   One final clean MASTER dataset selected interactively:
+#
 #     Data/NUBI_Data_10sec_Level_MASTER_CLEAN.csv
 #     Data/NUBI_Data_30sec_Level_MASTER_CLEAN.csv
 #     Data/NUBI_Data_60sec_Level_MASTER_CLEAN.csv
 #
-#   The script asks interactively which resolution to use: 10 / 30 / 60 sec.
+#   Pressing Enter at the resolution prompt uses the 60-sec
+#   manuscript/public-repository default.
 #
-#   One panel per subject, N subjects per page.
+# PANEL DEFINITION
+#   One subject per panel, with multiple subjects per page.
+#
 #   Raw HR is colored by activity3:
-#     - driving                         -> orange
-#     - non_driving_sedentary          -> black
-#     - non_driving_physical_activity  -> green
+#
+#     driving                         -> orange
+#     non_driving_sedentary           -> black
+#     non_driving_physical_activity   -> green
+#
 #   Baseline HR is shown in red.
 #
-#   X-axis:
-#     STUDY-DAY placement over a fixed 7-slot layout:
-#       day1 = slot 1 (0-24h), day2 = slot 2 (24-48h), ..., day7 = slot 7
+# X-AXIS DEFINITION
+#   The x-axis uses study-day placement over a fixed 7-slot layout:
 #
-# IMPORTANT
-#   - Timestamps in `time` are treated as local clock time in America/Chicago.
-#   - day_num is treated as the PRIMARY study-day key.
-#   - Day1..Day7 are weekday-coded study-day labels, NOT necessarily
-#     consecutive calendar dates.
-#   - Missing grid points are inserted within each study-day slot based on the
-#     chosen resolution so line breaks appear correctly.
+#     day1 = slot 1, 0-24 h
+#     day2 = slot 2, 24-48 h
+#     ...
+#     day7 = slot 7, 144-168 h
+#
+#   day_num is treated as the primary study-day key. Day1..Day7 are
+#   weekday-coded study-day labels and are not assumed to be
+#   consecutive calendar dates.
+#
+# TIME HANDLING
+#   Timestamps in `time` are parsed as local clock time in:
+#
+#     America/Chicago
+#
+#   Missing grid points are inserted within each study-day slot at
+#   the selected resolution so gaps appear as line breaks.
 #
 # REQUIRED COLUMNS
-#   p_id, time, raw_hr, bl_hr, activity3, day_num
+#   After name canonicalization, the input dataset must contain:
 #
-# OUTPUT
-#   Results/paper_figs/<timestamp>_<RES>sec_Supplementary_Figure_activity3/Figures/Supplementary_Figure.pdf
-#   plus run log and diagnostics
+#     p_id
+#     time
+#     raw_hr
+#     bl_hr
+#     activity3
+#     day_num
+#
+# MAJOR OUTPUTS
+#   The script writes the supplementary figure and diagnostics under:
+#
+#     Results/paper_figs/<timestamp>_<RES>sec_supplementary_figure_activity3/
+#
+#   Main figure:
+#
+#     Figures/Supplementary_Figure.pdf
+#
+#   Diagnostics:
+#
+#     Diagnostics/activity3_counts.csv
+#     Diagnostics/subject_summary_before_fill.csv
+#     Diagnostics/duplicate_pid_time_rows.csv
+#     Diagnostics/subject_summary_study_day_slots.csv
+#     Diagnostics/baseline_subject_study_day_level.csv
+#     Diagnostics/baseline_subject_study_day_summary.csv
+#     Diagnostics/baseline_study_day_overall_summary.csv
+#     Diagnostics/baseline_subject_calendar_day_level.csv
+#     Diagnostics/baseline_subject_calendar_day_summary.csv
+#     Diagnostics/baseline_calendar_day_overall_summary.csv
+#     Diagnostics/missingness_after_fill.csv
+#     run_log.txt
+#
+# REPOSITORY SCOPE
+#   This public repository starts from the final clean MASTER
+#   dataset. It does not rebuild upstream wearable, smartphone,
+#   vehicle, or ground-truth streams.
+#
+# PRIVACY NOTE
+#   This script uses curated timestamped features and activity
+#   labels. It does not require direct GPS coordinates or raw
+#   location traces.
 # ============================================================
 
 suppressPackageStartupMessages({
@@ -89,18 +151,28 @@ project_root <- normalizePath(file.path(getwd(), ".."), mustWork = FALSE)
 # ----------------------------
 # Interactive resolution choice
 # ----------------------------
-choose_resolution <- function() {
-  cat("\nAvailable resolutions: 10, 30, 60 seconds\n")
-  ans <- readline(prompt = "Enter desired resolution (10/30/60): ")
-  ans <- trimws(ans)
+choose_resolution <- function(default = 60L) {
+  cat(
+    "\nChoose dataset resolution:\n",
+    "  1) 10 sec  [requires matching MASTER data]\n",
+    "  2) 30 sec  [requires matching MASTER data]\n",
+    "  3) 60 sec  [manuscript/public-repository default]\n",
+    sep = ""
+  )
   
-  if (!ans %in% c("10", "30", "60")) {
-    stop("Invalid choice. Please enter exactly one of: 10, 30, 60.")
-  }
-  as.integer(ans)
+  ans <- trimws(readline(
+    sprintf("Enter 10 / 30 / 60 (or 1/2/3). Press Enter for %d sec: ", default)
+  ))
+  
+  if (ans == "") return(as.integer(default))
+  if (ans %in% c("1", "10")) return(10L)
+  if (ans %in% c("2", "30")) return(30L)
+  if (ans %in% c("3", "60")) return(60L)
+  
+  stop("Invalid choice: ", ans, " (expected 10/30/60 or 1/2/3)")
 }
 
-RES_SECONDS <- choose_resolution()
+RES_SECONDS <- choose_resolution(default = 60L)
 
 # Break lines across time gaps > 2 expected bins
 gap_threshold_secs <- 2L * RES_SECONDS
@@ -127,7 +199,7 @@ if (!file.exists(in_path)) {
 stamp   <- format(Sys.time(), "%Y%m%d_%H%M%S")
 out_dir <- file.path(
   project_root, "Results", "paper_figs",
-  paste0(stamp, "_", RES_SECONDS, "sec_Supplementary_Figure_activity3")
+  paste0(stamp, "_", RES_SECONDS, "sec_supplementary_figure_activity3")
 )
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
@@ -143,6 +215,41 @@ log_file  <- file.path(out_dir, "run_log.txt")
 # ----------------------------
 # Logging helpers
 # ----------------------------
+snakeify <- function(x) {
+  x <- tolower(x)
+  x <- gsub("[^a-z0-9]+", "_", x)
+  x <- gsub("_+", "_", x)
+  x <- gsub("^_|_$", "", x)
+  x
+}
+
+canonicalize_names <- function(dt) {
+  stopifnot(is.data.table(dt))
+  
+  old <- names(dt)
+  sn  <- snakeify(old)
+  
+  canon <- c(
+    p_id="p_id", pid="p_id", participant_id="p_id", participantid="p_id",
+    time="time", timestamp="time", datetime="time", date_time="time",
+    raw_hr="raw_hr", hr="raw_hr",
+    bl_hr="bl_hr", baseline_hr="bl_hr", hr_bl="bl_hr", hrbl="bl_hr",
+    activity3="activity3", activity_3="activity3",
+    day_num="day_num", daynum="day_num", days="day_num"
+  )
+  
+  new <- sn
+  hit <- sn %in% names(canon)
+  new[hit] <- unname(canon[sn[hit]])
+  
+  if (!identical(old, new)) {
+    new <- make.unique(new, sep = "_")
+    setnames(dt, old, new)
+  }
+  
+  dt
+}
+
 log_msg <- function(...) {
   msg <- paste0(format(Sys.time(), "%Y-%m-%d %H:%M:%S"), " | ", paste(..., collapse = ""))
   message(msg)
@@ -383,6 +490,8 @@ main <- function() {
   log_msg("Writing PDF: ", out_pdf)
   
   dt <- fread(in_path, showProgress = TRUE)
+  dt <- canonicalize_names(dt)
+  
   log_msg("Rows read: ", format(nrow(dt), big.mark = ","))
   log_msg("Columns read: ", ncol(dt))
   

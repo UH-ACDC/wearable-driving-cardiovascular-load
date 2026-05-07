@@ -1,50 +1,81 @@
 # ============================================================
-# Figure5_Predictability_Decomposition.R  (FULL REPLACEMENT)
-#
-# Figure 5 – Predictability Decomposition
+# 05_figure5_predictability_decomposition.R
 #
 # PURPOSE
-#   Build Figure 5a and Figure 5b from the latest ML prediction outputs:
-#     - Figure 5a: CV RMSE across folds
-#     - Figure 5b: CV R^2 across folds
+#   Generate Figure 5 for the npj Digital Medicine manuscript:
 #
-# MODELS
-#   - baseline0         : person baseline only
-#   - baseline_offset   : person baseline + learned context offset
-#   - enet              : elastic net
+#     From Instantaneous Heart Rate to Long-Horizon
+#     Cardiovascular Burden in Naturalistic Daily Life
 #
-# STRATA
-#   - DRIVING
-#   - NONDRIVING_SEDENTARY
+#   The script summarizes cross-validated prediction performance
+#   for heart-rate prediction models in driving and non-driving
+#   sedentary contexts.
+#
+# ANALYTIC DEFINITION
+#   Figure 5 decomposes predictability into three nested model
+#   stages:
+#
+#     baseline0
+#       Person baseline only
+#
+#     baseline_offset
+#       Person baseline plus learned context offset
+#       - driving: additional driving tax
+#       - non-driving sedentary: additional daily-living tax
+#
+#     enet
+#       Elastic-net model including additional modulators
+#
+# PANEL DEFINITIONS
+#   A. Cross-validated RMSE across folds
+#   B. Cross-validated squared-correlation R^2 across folds
 #
 # INPUT
-#   Searched relative to project structure:
-#     <project_root>/Results/
+#   The script searches recursively under:
+#
+#     Results/
 #
 #   Preferred prediction filenames:
+#
 #     predictions_all_models_both_strata.csv
 #     predictions_all_models.csv
 #     oof_predictions_all_models_both_strata.csv
 #     oof_predictions_all_models.csv
 #
-# OUTPUT
-#   <project_root>/Results/paper_figs/<timestamp>_<RES>sec_Figure5_Predictability_Decomposition/
-#     Figures/Fig5a_Predictability_Decomposition_RMSE.pdf/png
-#     Figures/Fig5b_Predictability_Decomposition_R2.pdf/png
-#     fig5_metrics_by_fold.csv
-#     fig5_summary.csv
-#     fig5_decomposition_rmse.csv
+#   The script prioritizes files matching the selected resolution.
+#
+# MAJOR OUTPUTS
+#   The script writes Figure 5 and supporting summaries under:
+#
+#     Results/paper_figs/<timestamp>_<RES>sec_figure5_predictability_decomposition/
+#
+#   Main outputs:
+#
+#     Figures/Figure5a_Predictability_Decomposition_RMSE.pdf
+#     Figures/Figure5a_Predictability_Decomposition_RMSE.png
+#     Figures/Figure5b_Predictability_Decomposition_R2.pdf
+#     Figures/Figure5b_Predictability_Decomposition_R2.png
+#     figure5_metrics_by_fold.csv
+#     figure5_summary.csv
+#     figure5_decomposition_rmse.csv
 #     run_log.txt
+#
+# REPOSITORY SCOPE
+#   This public repository starts from curated model prediction
+#   outputs. It does not retrain the machine-learning models from
+#   raw wearable, smartphone, vehicle, or ground-truth streams.
+#
+# PRIVACY NOTE
+#   This script operates on fold-level prediction outputs and does
+#   not require direct GPS coordinates or raw location traces.
 # ============================================================
 
 suppressPackageStartupMessages({
-  library(data.table)
   library(dplyr)
   library(tidyr)
   library(readr)
   library(stringr)
   library(ggplot2)
-  library(scales)
   library(ggpattern)
 })
 
@@ -60,13 +91,6 @@ PNG_DPI <- 300
 SAVE_R2_IF_ALL_NA <- TRUE
 
 MODEL_ORDER <- c("baseline0", "baseline_offset", "enet")
-
-# Generic labels kept only for internal ordering if needed
-MODEL_LABELS <- c(
-  baseline0       = "Baseline only",
-  baseline_offset = "Baseline + offset",
-  enet            = "ENet"
-)
 
 # Within-facet shades:
 #   DRIVING = oranges
@@ -116,23 +140,33 @@ message("paper_figs root: ", paper_figs_root)
 # ----------------------------
 # Resolution picker
 # ----------------------------
-pick_resolution <- function() {
+# The public repository currently includes curated prediction
+# outputs for the resolution(s) used in the manuscript. The picker
+# is retained so the same script can be reused if additional
+# 10-sec or 30-sec prediction outputs are added later.
+
+pick_resolution <- function(default = 60L) {
   cat(
-    "\nChoose dataset resolution:\n",
-    "  1) 10 sec\n",
-    "  2) 30 sec\n",
-    "  3) 60 sec\n",
+    "\nChoose prediction-output resolution:\n",
+    "  1) 10 sec  [requires matching prediction CSV under Results/]\n",
+    "  2) 30 sec  [requires matching prediction CSV under Results/]\n",
+    "  3) 60 sec  [manuscript/public-repository default]\n",
     sep = ""
   )
-  ans <- trimws(readline("Enter 10 / 30 / 60 (or 1/2/3): "))
   
+  ans <- trimws(readline(
+    sprintf("Enter 10 / 30 / 60 (or 1/2/3). Press Enter for %d sec: ", default)
+  ))
+  
+  if (ans == "") return(as.integer(default))
   if (ans %in% c("1", "10")) return(10L)
   if (ans %in% c("2", "30")) return(30L)
   if (ans %in% c("3", "60")) return(60L)
   
   stop("Invalid entry: ", ans, " (expected 10/30/60 or 1/2/3)")
 }
-RES_SECONDS <- pick_resolution()
+
+RES_SECONDS <- pick_resolution(default = 60L)
 
 # ----------------------------
 # Helpers
@@ -307,7 +341,7 @@ stamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
 
 out_dir <- file.path(
   paper_figs_root,
-  paste0(stamp, "_", RES_SECONDS, "sec_Figure5_Predictability_Decomposition")
+  paste0(stamp, "_", RES_SECONDS, "sec_figure5_predictability_decomposition")
 )
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
@@ -321,8 +355,8 @@ log_msg <- function(...) {
   cat(msg, "\n", file = log_file, append = TRUE)
 }
 
-log_msg("Figure5 script start")
-log_msg("Script dir: ", script_dir)
+log_msg("Script: 05_figure5_predictability_decomposition.R")
+log_msg("Figure 5 predictability decomposition analysis start")
 log_msg("Project root: ", project_root)
 log_msg("Results root: ", results_root)
 log_msg("Resolution: ", RES_SECONDS, " sec")
@@ -382,8 +416,8 @@ by_fold <- preds %>%
   ) %>%
   arrange(stratum, match(model, MODEL_ORDER), fold)
 
-write_csv(by_fold, file.path(out_dir, "fig5_metrics_by_fold.csv"))
-log_msg("Wrote fig5_metrics_by_fold.csv")
+write_csv(by_fold, file.path(out_dir, "figure5_metrics_by_fold.csv"))
+log_msg("Wrote figure5_metrics_by_fold.csv")
 
 # ============================================================
 # Summary across folds
@@ -404,8 +438,8 @@ sum_fold <- by_fold %>%
   ) %>%
   arrange(stratum, model)
 
-write_csv(sum_fold, file.path(out_dir, "fig5_summary.csv"))
-log_msg("Wrote fig5_summary.csv")
+write_csv(sum_fold, file.path(out_dir, "figure5_summary.csv"))
+log_msg("Wrote figure5_summary.csv")
 
 # ============================================================
 # Decomposition table for RMSE narration
@@ -433,8 +467,8 @@ decomp_rmse <- sum_fold %>%
     )
   )
 
-write_csv(decomp_rmse, file.path(out_dir, "fig5_decomposition_rmse.csv"))
-log_msg("Wrote fig5_decomposition_rmse.csv")
+write_csv(decomp_rmse, file.path(out_dir, "figure5_decomposition_rmse.csv"))
+log_msg("Wrote figure5_decomposition_rmse.csv")
 
 # ============================================================
 # Plot prep
@@ -459,17 +493,12 @@ plot_df <- sum_fold %>%
         "ENet"
       )
     ),
-    fill_col = case_when(
-      stratum_raw == "DRIVING" & model_lab == "Baseline only" ~ "#FDD9B5",
-      stratum_raw == "DRIVING" & model_lab == "Baseline + driving tax" ~ "#F4A261",
-      stratum_raw == "DRIVING" & model_lab == "ENet" ~ "#D97706",
-      stratum_raw == "NONDRIVING_SEDENTARY" & model_lab == "Baseline only" ~ "white",
-      stratum_raw == "NONDRIVING_SEDENTARY" & model_lab == "Baseline + daily-living tax" ~ "grey80",
-      stratum_raw == "NONDRIVING_SEDENTARY" & model_lab == "ENet" ~ "grey55",
-      TRUE ~ "white"
-    ),
+    palette_key = paste(stratum_raw, as.character(model_lab), sep = "__"),
+    fill_col = unname(FACET_MODEL_PAL[palette_key]),
+    fill_col = ifelse(is.na(fill_col), "white", fill_col),
     pattern_type = case_when(
-      stratum_raw == "NONDRIVING_SEDENTARY" & model_lab == "Baseline only" ~ "stripe",
+      stratum_raw == "NONDRIVING_SEDENTARY" &
+        model_lab == "Baseline only" ~ "stripe",
       TRUE ~ "none"
     ),
     err_col = "black"
@@ -562,7 +591,7 @@ p_rsq <- ggplot(plot_df, aes(x = model_lab, y = rsq_mean)) +
   facet_wrap(~ stratum, nrow = 1, scales = "free_x") +
   labs(
     title = "Predictability decomposition (HR)",
-    subtitle = "Cross-validated variance explained across folds",
+    subtitle = "Cross-validated explained variance across folds",
     x = NULL,
     y = expression(R^2)
   ) +
@@ -573,13 +602,13 @@ p_rsq <- ggplot(plot_df, aes(x = model_lab, y = rsq_mean)) +
 # ============================================================
 safe_save_pdf(
   p_rmse,
-  file.path(fig_dir, "Fig5a_Predictability_Decomposition_RMSE.pdf"),
+  file.path(fig_dir, "Figure5a_Predictability_Decomposition_RMSE.pdf"),
   w = PDF_W,
   h = PDF_H
 )
 safe_save_png(
   p_rmse,
-  file.path(fig_dir, "Fig5a_Predictability_Decomposition_RMSE.png"),
+  file.path(fig_dir, "Figure5a_Predictability_Decomposition_RMSE.png"),
   w = PDF_W,
   h = PDF_H,
   dpi = PNG_DPI
@@ -590,13 +619,13 @@ all_rsq_na <- all(!is.finite(plot_df$rsq_mean))
 if (!all_rsq_na || isTRUE(SAVE_R2_IF_ALL_NA)) {
   safe_save_pdf(
     p_rsq,
-    file.path(fig_dir, "Fig5b_Predictability_Decomposition_R2.pdf"),
+    file.path(fig_dir, "Figure5b_Predictability_Decomposition_R2.pdf"),
     w = PDF_W,
     h = PDF_H
   )
   safe_save_png(
     p_rsq,
-    file.path(fig_dir, "Fig5b_Predictability_Decomposition_R2.png"),
+    file.path(fig_dir, "Figure5b_Predictability_Decomposition_R2.png"),
     w = PDF_W,
     h = PDF_H,
     dpi = PNG_DPI

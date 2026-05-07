@@ -1,39 +1,78 @@
 # ============================================================
-# NUBI-ML-v12_00-COMPARE_driving_vs_nondriving_DIRECTRAWHR_STRATASPEC_MASTER_NOAFFINE_WITH_IMPORTANCE.R
-#
-# FULL REPLACEMENT
+# 00_run_predictive_decomposition.R
 #
 # PURPOSE
-#   Compare predictability of RAW_HR in:
-#     (A) DRIVING rows
-#     (B) NONDRIVING_SEDENTARY rows
+#   Run the main predictive-decomposition analysis for the
+#   npj Digital Medicine manuscript:
 #
-#   using the current MASTER datasets:
-#     Data/NUBI_Data_<RES>sec_Level_MASTER_CLEAN.csv
+#     From Instantaneous Heart Rate to Long-Horizon
+#     Cardiovascular Burden in Naturalistic Daily Life
 #
-# KEY UPDATES VS LEGACY SCRIPT
-#   - Uses MASTER_CLEAN datasets (not old HRBL_CLEANED_v2 files)
-#   - Uses activity3 directly to define strata:
-#       driving
-#       non_driving_sedentary
-#   - Includes morning_anxiety as a predictor
-#   - Includes newer driving variables when present:
-#       rtp, ff_speed, energy_acc
-#   - Keeps trip_distance, drops distance from predictor pool
-#   - Keeps NONDRIVING_SEDENTARY model lean and conceptually clean
-#   - Uses weather_info only in DRIVING; excludes weather from NONDRIVING_SEDENTARY
-#   - Retains fold-safe baselines:
-#       baseline0       : raw_hat = bl_hr_person
-#       baseline_offset : raw_hat = bl_hr_person + c_off
-#   - ENet evaluated as:
-#       Stage 1 tune_grid -> Stage 2 tune_grid -> FINAL fit_resamples()
-#       with OOF predictions from FINAL fit_resamples()
+#   The script compares heart-rate predictability in two
+#   behavioral strata:
 #
-# OUTPUT
-#   Results/nubi_ml/<timestamp>_<RES>sec_v12_00_compare_drive_vs_nondrive_directRAWHR_MASTER_NOAFFINE_IMPORTANCE/
+#     1. DRIVING
+#     2. NONDRIVING_SEDENTARY
 #
-# MAIN OUTPUT FILE FOR FIGURE 5
-#   predictions_all_models_both_strata.csv
+#   using the curated 60-second analysis dataset:
+#
+#     Data/NUBI_Data_60sec_Level_MASTER_CLEAN.csv
+#
+# ANALYTIC FRAMEWORK
+#   Instantaneous raw heart rate is modeled as a layered
+#   decomposition:
+#
+#     raw_hr = participant baseline
+#            + context-level tax
+#            + covariate-based modulation
+#            + residual variation
+#
+#   The script evaluates three nested models within each stratum:
+#
+#     baseline_only
+#       raw_hat = bl_hr_person
+#
+#     baseline_plus_tax
+#       raw_hat = bl_hr_person + context-specific offset
+#
+#     elastic_net
+#       raw_hat = bl_hr_person + context-specific offset
+#                 + learned covariate-based modulation
+#
+#   Model evaluation uses grouped cross-validation with
+#   participant as the grouping unit, so that all observations
+#   from a participant are assigned to the same fold.
+#
+# INPUT
+#   Data/NUBI_Data_60sec_Level_MASTER_CLEAN.csv
+#
+# REQUIRED ACTIVITY LABELS
+#   activity3 == "driving"
+#   activity3 == "non_driving_sedentary"
+#
+# MAJOR OUTPUTS
+#   The script writes model predictions, performance summaries,
+#   feature-importance summaries, selected tuning parameters,
+#   predictor lists, diagnostics, and model artifacts under:
+#
+#     Results/nubi_ml/<timestamp>_60sec_predictive_decomposition/
+#
+#   Key downstream output:
+#
+#     predictions_all_models_both_strata.csv
+#
+#   This file is used by the downstream Figure 5 and Figure 8
+#   scripts. Additional feature-importance and model-summary
+#   outputs are used by the Figure 6 and Figure 7 scripts.
+#
+# REPOSITORY SCOPE
+#   This public repository starts from the curated analysis-ready
+#   60-second dataset. It does not reconstruct the dataset from
+#   raw wearable, smartphone, vehicle, or ground-truth streams.
+#
+# PRIVACY NOTE
+#   Direct GPS coordinate columns are not required for this
+#   analysis and are removed from the public dataset.
 # ============================================================
 
 suppressPackageStartupMessages({
@@ -92,28 +131,44 @@ script_dir <- if (!is.na(this_script) && file.exists(this_script)) {
   getwd()
 }
 script_dir <- normalizePath(script_dir, mustWork = TRUE)
+
 setwd(script_dir)
 
 project_root <- normalizePath(file.path(script_dir, ".."), mustWork = TRUE)
-results_root <- normalizePath(file.path(project_root, "Results"), mustWork = TRUE)
+
+results_root <- file.path(project_root, "Results")
+dir.create(results_root, recursive = TRUE, showWarnings = FALSE)
+results_root <- normalizePath(results_root, mustWork = TRUE)
+
 data_root    <- normalizePath(file.path(project_root, "Data"), mustWork = TRUE)
 
 message("Working directory (Scripts): ", getwd())
 message("Project root: ", project_root)
 
 # ----------------------------
-# Interactive resolution picker
+# Resolution picker
 # ----------------------------
-pick_resolution <- function() {
+# The public repository currently includes the curated 60-second dataset:
+#
+#   Data/NUBI_Data_60sec_Level_MASTER_CLEAN.csv
+#
+# The picker is retained so the same script can be reused if 10-sec or
+# 30-sec analysis datasets are added later.
+
+pick_resolution <- function(default = 60L) {
   cat(
     "\nChoose dataset resolution:\n",
-    "  1) 10 sec\n",
-    "  2) 30 sec\n",
-    "  3) 60 sec\n",
+    "  1) 10 sec  [requires Data/NUBI_Data_10sec_Level_MASTER_CLEAN.csv]\n",
+    "  2) 30 sec  [requires Data/NUBI_Data_30sec_Level_MASTER_CLEAN.csv]\n",
+    "  3) 60 sec  [included in this repository]\n",
     sep = ""
   )
-  ans <- trimws(readline("Enter 10 / 30 / 60 (or 1/2/3): "))
   
+  ans <- trimws(readline(
+    sprintf("Enter 10 / 30 / 60 (or 1/2/3). Press Enter for %d sec: ", default)
+  ))
+  
+  if (ans == "") return(as.integer(default))
   if (ans %in% c("1", "10")) return(10L)
   if (ans %in% c("2", "30")) return(30L)
   if (ans %in% c("3", "60")) return(60L)
@@ -121,24 +176,30 @@ pick_resolution <- function() {
   stop("Invalid entry: ", ans, " (expected 10/30/60 or 1/2/3)")
 }
 
-RES_SECONDS <- pick_resolution()
+RES_SECONDS <- pick_resolution(default = 60L)
 
 in_path <- file.path(
   data_root,
   sprintf("NUBI_Data_%dsec_Level_MASTER_CLEAN.csv", RES_SECONDS)
 )
-stopifnot(file.exists(in_path))
+
+if (!file.exists(in_path)) {
+  stop(
+    "Dataset not found: ", in_path, "\n",
+    "The public repository currently includes only the 60-second dataset. ",
+    "Use 60 sec, or add the corresponding ", RES_SECONDS,
+    "-second dataset under Data/."
+  )
+}
 
 # ----------------------------
 # Output folder
 # ----------------------------
 stamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
 out_dir <- file.path(
-  results_root, "nubi_ml",
-  paste0(
-    stamp, "_", RES_SECONDS,
-    "sec_v12_00_compare_drive_vs_nondrive_directRAWHR_MASTER_NOAFFINE_IMPORTANCE"
-  )
+  results_root,
+  "nubi_ml",
+  paste0(stamp, "_", RES_SECONDS, "sec_predictive_decomposition")
 )
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
@@ -152,7 +213,7 @@ log_msg <- function(...) {
   cat(msg, "\n", file = log_file, append = TRUE)
 }
 
-log_msg("Script: v12.00 compare DRIVING vs NONDRIVING_SEDENTARY DIRECT RAW_HR (MASTER)")
+log_msg("Script: 00_run_predictive_decomposition.R")
 log_msg("Resolution: ", RES_SECONDS, " sec")
 log_msg("Input: ", in_path)
 log_msg("Output dir: ", out_dir)

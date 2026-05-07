@@ -1,37 +1,88 @@
 # ============================================================
-# Figure7_ENetHorizon.R  (FULL REPLACEMENT)
+# 07_figure7_enet_horizon_simulation.R
 #
-# Figure 7 – ENet Horizon Simulation: Cumulative Cardiovascular Exposure
+# PURPOSE
+#   Generate Figure 7 for the npj Digital Medicine manuscript:
 #
-# PANEL A
-#   Weather contrast (ENet, observed DRIVING rows only):
-#   Clouds vs Adverse weather
-#   NOTE:
-#     In the DRIVING stratum, weather_info == "other" is relabeled
-#     as "Adverse weather" for the figure.
+#     From Instantaneous Heart Rate to Long-Horizon
+#     Cardiovascular Burden in Naturalistic Daily Life
 #
-# PANEL B
-#   Trait-anxiety extremes (ENet, matched typical driving profile):
-#   Lowest vs Highest trait anxiety
+#   The script uses the fitted ENet specification and curated
+#   driving data to project model-predicted baseline-referenced
+#   cardiovascular burden into annual cumulative NHR-hours under
+#   repeated driving schedules.
 #
-# CORE IDEA
-#   Small per-unit differences in predicted NHR can accumulate into
-#   substantial annual cardiovascular burden as daily driving duration rises.
+# ANALYTIC DEFINITION
+#   Figure 7 translates short-timescale ENet-predicted heart-rate
+#   burden into long-horizon cumulative exposure.
 #
-# DATA SOURCE
-#   Uses DRIVING rows from:
-#     Data/NUBI_Data_<RES>sec_Level_MASTER_CLEAN.csv
+#   The ENet model is refit on the full DRIVING stratum using the
+#   selected manuscript hyperparameters. Predicted RAW_HR is then
+#   converted to predicted baseline-referenced load:
 #
-# MODEL
-#   - reads DRIVING artifacts from the selected nubi_ml run folder:
-#       predictor_list_DRIVING.csv
-#       best_params_DRIVING.csv
-#   - refits ENet on FULL DRIVING data
-#   - predicts RAW_HR_hat
-#   - converts to NHR_hat = RAW_HR_hat - bl_hr_person
+#     NHR_hat = RAW_HR_hat - bl_hr_person
 #
-# OUTPUTS
-#   Results/paper_figs/<timestamp>_<RES>sec_Figure7_ENetHorizon_Weather_and_TraitTypical/
+# PANEL DEFINITIONS
+#   A. Driving weather contrast using observed DRIVING rows:
+#      Clouds versus Adverse weather
+#
+#   B. Trait-anxiety contrast using a matched typical driving
+#      profile:
+#      Lowest versus highest trait anxiety
+#
+# INPUT
+#   1) Final clean MASTER dataset:
+#
+#        Data/NUBI_Data_<RES>sec_Level_MASTER_CLEAN.csv
+#
+#   2) Existing ML output folder under:
+#
+#        Results/nubi_ml/<RUN_FOLDER>/
+#
+#      Expected files:
+#
+#        predictor_list_DRIVING.csv
+#        best_params_DRIVING.csv
+#
+# MAJOR OUTPUTS
+#   The script writes Figure 7 and simulation diagnostics under:
+#
+#     Results/paper_figs/<timestamp>_<RES>sec_figure7_enet_horizon_weather_trait/
+#
+#   Main outputs:
+#
+#     Figures/Figure7_ENetHorizon_Weather_and_TraitTypical.pdf
+#     Figures/Figure7_ENetHorizon_Weather_and_TraitTypical.png
+#     Figure7_enet_params_used.csv
+#     figure7_weather_split_audit.csv
+#     figure7_weather_labels_used.csv
+#     figure7_panelA_weather_boot_mu_draws.csv
+#     figure7_panelA_weather_sim_summary.csv
+#     figure7_typical_profile_used.csv
+#     figure7_panelB_trait_params.csv
+#     figure7_panelB_trait_sim_summary.csv
+#     run_log.txt
+#
+# REPOSITORY SCOPE
+#   This public repository starts from the final clean MASTER
+#   dataset and curated ML model-selection outputs. It does not
+#   rebuild the full upstream machine-learning pipeline from raw
+#   wearable, smartphone, vehicle, or ground-truth streams.
+#
+# PRIVACY NOTE
+#   This script uses curated features and model summaries. It does
+#   not require direct GPS coordinates or raw location traces.
+#
+# NOTES
+#   - The ENet model is refit on full DRIVING data using saved
+#     DRIVING predictors and selected hyperparameters.
+#   - Weather_info == "other" is relabeled as "Adverse weather"
+#     for the figure.
+#   - Panel B uses a matched typical driving profile and varies
+#     trait anxiety while holding all other predictors fixed.
+#   - When USE_COMMON_BASELINE_FOR_TRAIT_PANEL is TRUE, baseline
+#     is held fixed so that Panel B reflects the trait-anxiety
+#     contrast rather than baseline differences.
 # ============================================================
 
 suppressPackageStartupMessages({
@@ -50,12 +101,23 @@ suppressPackageStartupMessages({
 })
 
 options(warn = 1)
-tidymodels_prefer()
+if (exists("tidymodels_prefer", mode = "function")) {
+  tidymodels_prefer()
+}
 set.seed(20260309)
 
 # ----------------------------
 # User toggles
 # ----------------------------
+# Use exact folder name inside Results/nubi_ml, or leave NULL to auto-pick
+# the newest run folder for the chosen resolution containing the required
+# Figure 7 files.
+RUN_DIR_NAME <- NULL
+
+# Optional extra filter when auto-picking. Leave blank for public GitHub use,
+# because downloaded/copied run folders may have different timestamped names.
+RUN_DIR_SUFFIX_REGEX <- ""
+
 LOCAL_TZ <- "America/Chicago"
 DRIVING_LABELS <- c("driving")
 
@@ -109,9 +171,6 @@ PDF_W <- 11.3
 PDF_H <- 7.8
 PNG_DPI <- 300
 
-# Auto-pick latest run folder for this resolution
-AUTO_PICK_LATEST_RUN <- TRUE
-
 # ----------------------------
 # Robust wd = Scripts/
 # ----------------------------
@@ -123,18 +182,28 @@ project_root <- normalizePath(file.path(getwd(), ".."), mustWork = FALSE)
 # ----------------------------
 # Resolution picker
 # ----------------------------
-pick_resolution <- function() {
-  cat("\nChoose dataset resolution:\n",
-      "  1) 10 sec\n",
-      "  2) 30 sec\n",
-      "  3) 60 sec\n", sep = "")
-  ans <- trimws(readline("Enter 10 / 30 / 60 (or 1/2/3): "))
+pick_resolution <- function(default = 60L) {
+  cat(
+    "\nChoose dataset resolution:\n",
+    "  1) 10 sec  [requires matching MASTER data and ML outputs]\n",
+    "  2) 30 sec  [requires matching MASTER data and ML outputs]\n",
+    "  3) 60 sec  [manuscript/public-repository default]\n",
+    sep = ""
+  )
+  
+  ans <- trimws(readline(
+    sprintf("Enter 10 / 30 / 60 (or 1/2/3). Press Enter for %d sec: ", default)
+  ))
+  
+  if (ans == "") return(as.integer(default))
   if (ans %in% c("1", "10")) return(10L)
   if (ans %in% c("2", "30")) return(30L)
   if (ans %in% c("3", "60")) return(60L)
-  stop("Invalid entry: ", ans)
+  
+  stop("Invalid entry: ", ans, " (expected 10/30/60 or 1/2/3)")
 }
-RES_SECONDS <- pick_resolution()
+
+RES_SECONDS <- pick_resolution(default = 60L)
 
 # ----------------------------
 # Input dataset
@@ -151,55 +220,70 @@ stopifnot(file.exists(in_path))
 nubi_ml_root <- file.path(project_root, "Results", "nubi_ml")
 stopifnot(dir.exists(nubi_ml_root))
 
-extract_version_num <- function(x) {
-  x_low <- tolower(x)
-  m <- stringr::str_match(x_low, "v([0-9]+)")
-  out <- suppressWarnings(as.numeric(m[, 2]))
-  ifelse(is.na(out), -Inf, out)
+required_fig7_files <- c(
+  "predictor_list_DRIVING.csv",
+  "best_params_DRIVING.csv"
+)
+
+pick_latest_run_folder <- function(res_seconds, suffix_regex = "") {
+  all_dirs <- list.dirs(nubi_ml_root, full.names = TRUE, recursive = FALSE)
+  all_dirs <- all_dirs[file.info(all_dirs)$isdir %in% TRUE]
+  
+  if (length(all_dirs) == 0) {
+    stop("No run folders found under: ", nubi_ml_root)
+  }
+  
+  res_pat <- paste0("(^|[^0-9])", res_seconds, "sec([^0-9]|$)")
+  
+  has_res <- grepl(res_pat, basename(all_dirs), ignore.case = TRUE, perl = TRUE)
+  
+  has_required <- vapply(
+    all_dirs,
+    function(d) all(file.exists(file.path(d, required_fig7_files))),
+    logical(1)
+  )
+  
+  cand <- all_dirs[has_res & has_required]
+  
+  if (!is.null(suffix_regex) && nzchar(suffix_regex)) {
+    cand <- cand[grepl(suffix_regex, basename(cand), ignore.case = TRUE)]
+  }
+  
+  if (length(cand) == 0) {
+    stop(
+      "Could not find an ML run folder under Results/nubi_ml/ containing all Figure 7 inputs for ",
+      res_seconds, " sec.\n",
+      "Required files:\n  ",
+      paste(required_fig7_files, collapse = "\n  "),
+      "\n\nAvailable folders:\n  ",
+      paste(basename(list.dirs(nubi_ml_root, recursive = FALSE, full.names = TRUE)), collapse = "\n  ")
+    )
+  }
+  
+  cand[which.max(file.info(cand)$mtime)]
 }
 
-pick_latest_run_folder <- function(res_seconds) {
-  all_dirs <- list.dirs(nubi_ml_root, full.names = FALSE, recursive = FALSE)
-  
-  res_pat    <- paste0("(^|[^0-9])", res_seconds, "sec([^0-9]|$)")
-  drive_pat  <- "compare_drive_vs_nondrive_directRAWHR"
-  affine_pat <- "NOAFFINE_IMPORTANCE$"
-  
-  cand <- all_dirs[
-    grepl(res_pat, all_dirs, ignore.case = TRUE, perl = TRUE) &
-      grepl(drive_pat, all_dirs, ignore.case = TRUE, perl = TRUE) &
-      grepl(affine_pat, all_dirs, ignore.case = TRUE, perl = TRUE)
-  ]
-  
-  if (length(cand) == 0) return(NA_character_)
-  
-  rank_df <- data.frame(
-    run_folder  = cand,
-    version_num = extract_version_num(cand),
-    stringsAsFactors = FALSE
-  ) %>%
-    arrange(desc(version_num), desc(run_folder))
-  
-  rank_df$run_folder[1]
+if (!is.null(RUN_DIR_NAME)) {
+  run_folder <- RUN_DIR_NAME
+  run_dir <- file.path(nubi_ml_root, run_folder)
+} else {
+  run_dir <- pick_latest_run_folder(
+    RES_SECONDS,
+    suffix_regex = RUN_DIR_SUFFIX_REGEX
+  )
+  run_folder <- basename(run_dir)
+  message("Auto-selected run folder: ", run_folder)
 }
 
-run_folder <- NA_character_
-if (isTRUE(AUTO_PICK_LATEST_RUN)) {
-  run_folder <- pick_latest_run_folder(RES_SECONDS)
-  if (!is.na(run_folder)) message("AUTO_PICK_LATEST_RUN selected: ", run_folder)
+if (!dir.exists(run_dir)) {
+  stop("Selected run folder does not exist: ", run_dir)
 }
-if (is.na(run_folder)) {
-  run_folder <- trimws(readline("RUN folder under Results/nubi_ml/: "))
-  if (run_folder == "") stop("No RUN folder provided.")
-}
-
-run_dir <- file.path(nubi_ml_root, run_folder)
-stopifnot(dir.exists(run_dir))
 
 pred_list_path <- file.path(run_dir, "predictor_list_DRIVING.csv")
 best_path      <- file.path(run_dir, "best_params_DRIVING.csv")
-stopifnot(file.exists(pred_list_path))
-stopifnot(file.exists(best_path))
+
+if (!file.exists(pred_list_path)) stop("Missing predictor list: ", pred_list_path)
+if (!file.exists(best_path)) stop("Missing best params: ", best_path)
 
 # ----------------------------
 # Output folder
@@ -207,7 +291,7 @@ stopifnot(file.exists(best_path))
 stamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
 out_dir <- file.path(
   project_root, "Results", "paper_figs",
-  paste0(stamp, "_", RES_SECONDS, "sec_Figure7_ENetHorizon_Weather_and_TraitTypical")
+  paste0(stamp, "_", RES_SECONDS, "sec_figure7_enet_horizon_weather_trait")
 )
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
@@ -248,7 +332,11 @@ safe_save_png <- function(plot_obj, path, w = 7, h = 5, dpi = 300) {
   ggsave(filename = path, plot = plot_obj, width = w, height = h, dpi = dpi)
 }
 
-log_msg("Figure7 start | RES=", RES_SECONDS, "sec | N_SIM=", N_SIM)
+log_msg("Script: 07_figure7_enet_horizon_simulation.R")
+log_msg("Figure 7 ENet horizon simulation start")
+log_msg("Project root: ", project_root)
+log_msg("Resolution: ", RES_SECONDS, " sec")
+log_msg("N_SIM: ", N_SIM)
 log_msg("Input: ", in_path)
 log_msg("Run dir: ", run_dir)
 log_msg("Output: ", out_dir)

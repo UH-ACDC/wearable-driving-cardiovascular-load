@@ -1,48 +1,51 @@
 # ============================================================
-# Figure1-Table1_ExploratoryInventory.R  (FULL REPLACEMENT)
+# 01_figure1_table1_exploratory_inventory.R
 #
 # PURPOSE
-#   Build Figure 1 and Table 1 from the FINAL validated multi-resolution
-#   master datasets:
-#     - Data/NUBI_Data_10sec_Level_MASTER_CLEAN.csv
-#     - Data/NUBI_Data_30sec_Level_MASTER_CLEAN.csv
-#     - Data/NUBI_Data_60sec_Level_MASTER_CLEAN.csv
+#   Generate Figure 1, Table 1, and the key-variable missingness
+#   summary for the npj Digital Medicine manuscript:
 #
-# KEY UPDATES VS OLD SCRIPT
-#   1) Uses FINAL MASTER datasets, not old *_HRBL_CLEANED_v2-B files.
-#   2) Uses `time` as input timestamp and parses it as local Chicago clock time.
-#   3) Uses `activity3` directly for context mapping:
-#        driving
-#        non_driving_sedentary
-#        non_driving_physical_activity
-#   4) Uses `day_num` directly as the primary study-day key.
-#   5) Treats `bl_hr` as already stabilized at the day level in the final datasets.
-#   6) Uses `trip_id` as the primary trip identifier when available.
-#   7) Computes NASA-TLX missingness only over participant-day-period units
-#      where DRIVING occurred.
-#   8) FIXED: trip_id leakage diagnostic denominator bug.
-#   9) FIXED: context-specific support counts in Table 1 now use unique support
-#      within each context instead of repeating overall counts.
-#   10) FIXED: trip_id, trip_distance, and trip_duration missingness are now
-#       evaluated at the collapsed trip level rather than at the row level.
-#   11) FIXED: when constructing trip-level summaries, trip_distance is taken
-#       from the LAST observed row within each trip (because it evolves during
-#       the trip), whereas trip_duration is taken from the FIRST observed row
-#       within each trip (because it is trip-constant in the data).
+#     From Instantaneous Heart Rate to Long-Horizon
+#     Cardiovascular Burden in Naturalistic Daily Life
 #
-# OUTPUTS
-#   Results/paper_figs/<timestamp>_<RES>sec_Figure1_Table1_ExploratoryInventory/
-#       Figures/
-#         Figure1-Table1.pdf
-#         Figure1-Table1.png
-#       Tables/
-#         Table1_CohortDataInventory.csv
-#         Table1_CohortDataInventory.tex
-#         Table1_Missingness_KeyVars.csv
-#         Table1_Missingness_KeyVars.tex
-#       Diagnostics/
-#         Diagnostic_DrivingOnlyLeakage_ByContext.csv
-#       run_log.txt
+#   The script summarizes the curated NUBI analysis dataset,
+#   including participant coverage, activity-context distribution,
+#   participant-level traits, NASA-TLX subscales, baseline and
+#   raw heart-rate summaries, temporal context, weather support,
+#   and driving-dynamics variables.
+#
+# INPUT
+#   Data/NUBI_Data_60sec_Level_MASTER_CLEAN.csv
+#
+# REQUIRED ACTIVITY LABELS
+#   activity3 == "driving"
+#   activity3 == "non_driving_sedentary"
+#   activity3 == "non_driving_physical_activity"
+#
+# MAJOR OUTPUTS
+#   The script writes Figure 1, Table 1, a missingness summary,
+#   and diagnostic files under:
+#
+#     Results/paper_figs/<timestamp>_60sec_figure1_table1_exploratory_inventory/
+#
+#   Main outputs:
+#
+#     Figures/Figure1-Table1.pdf
+#     Figures/Figure1-Table1.png
+#     Tables/Table1_CohortDataInventory.csv
+#     Tables/Table1_CohortDataInventory.tex
+#     Tables/Table1_Missingness_KeyVars.csv
+#     Tables/Table1_Missingness_KeyVars.tex
+#     Diagnostics/Diagnostic_DrivingOnlyLeakage_ByContext.csv
+#
+# REPOSITORY SCOPE
+#   This public repository starts from the curated analysis-ready
+#   60-second dataset. It does not reconstruct the dataset from
+#   raw wearable, smartphone, vehicle, or ground-truth streams.
+#
+# PRIVACY NOTE
+#   Direct GPS coordinate columns are removed from the public
+#   dataset and are not required for this figure or table.
 # ============================================================
 
 suppressPackageStartupMessages({
@@ -84,32 +87,50 @@ this_script <- tryCatch(normalizePath(sys.frame(1)$ofile), error = function(e) N
 if (!is.na(this_script) && file.exists(this_script)) setwd(dirname(this_script))
 message("Working directory (Scripts): ", getwd())
 
-project_root <- normalizePath(file.path(getwd(), ".."), mustWork = FALSE)
+project_root <- normalizePath(file.path(getwd(), ".."), mustWork = TRUE)
 
 # ----------------------------
-# Interactive resolution picker
+# Resolution picker
 # ----------------------------
-pick_resolution <- function() {
-  cat("\nChoose dataset resolution:\n",
-      "  1) 10 sec\n",
-      "  2) 30 sec\n",
-      "  3) 60 sec\n", sep = "")
-  ans <- readline("Enter 10 / 30 / 60 (or 1/2/3): ")
-  ans <- trimws(ans)
-  if (ans %in% c("1","10")) return(10L)
-  if (ans %in% c("2","30")) return(30L)
-  if (ans %in% c("3","60")) return(60L)
-  stop("Invalid entry: ", ans, "  (expected 10/30/60 or 1/2/3)")
+# The public repository currently includes the curated 60-second dataset:
+#
+#   Data/NUBI_Data_60sec_Level_MASTER_CLEAN.csv
+#
+# The picker is retained so the same script can be reused if 10-sec or
+# 30-sec analysis datasets are added later.
+
+pick_resolution <- function(default = 60L) {
+  cat(
+    "\nChoose dataset resolution:\n",
+    "  1) 10 sec  [requires Data/NUBI_Data_10sec_Level_MASTER_CLEAN.csv]\n",
+    "  2) 30 sec  [requires Data/NUBI_Data_30sec_Level_MASTER_CLEAN.csv]\n",
+    "  3) 60 sec  [included in this repository]\n",
+    sep = ""
+  )
+  
+  ans <- trimws(readline(
+    sprintf("Enter 10 / 30 / 60 (or 1/2/3). Press Enter for %d sec: ", default)
+  ))
+  
+  if (ans == "") return(as.integer(default))
+  if (ans %in% c("1", "10")) return(10L)
+  if (ans %in% c("2", "30")) return(30L)
+  if (ans %in% c("3", "60")) return(60L)
+  
+  stop("Invalid entry: ", ans, " (expected 10/30/60 or 1/2/3)")
 }
-RES_SECONDS <- pick_resolution()
+
+RES_SECONDS <- pick_resolution(default = 60L)
 
 # ----------------------------
 # Output folders
 # ----------------------------
 stamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
 out_dir <- file.path(
-  project_root, "Results", "paper_figs",
-  paste0(stamp, "_", RES_SECONDS, "sec_Figure1_Table1_ExploratoryInventory")
+  project_root,
+  "Results",
+  "paper_figs",
+  paste0(stamp, "_", RES_SECONDS, "sec_figure1_table1_exploratory_inventory")
 )
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
@@ -138,7 +159,17 @@ in_path <- switch(
   "30" = file.path(project_root, "Data", "NUBI_Data_30sec_Level_MASTER_CLEAN.csv"),
   "60" = file.path(project_root, "Data", "NUBI_Data_60sec_Level_MASTER_CLEAN.csv")
 )
-stopifnot(file.exists(in_path))
+if (!file.exists(in_path)) {
+  stop(
+    "Dataset not found: ", in_path, "\n",
+    "The public repository currently includes only the 60-second dataset. ",
+    "Use 60 sec, or add the corresponding ", RES_SECONDS,
+    "-second dataset under Data/."
+  )
+}
+
+log_msg("Script: 01_figure1_table1_exploratory_inventory.R")
+log_msg("Resolution: ", RES_SECONDS, " sec")
 log_msg("Input: ", in_path)
 log_msg("Output directory: ", out_dir)
 

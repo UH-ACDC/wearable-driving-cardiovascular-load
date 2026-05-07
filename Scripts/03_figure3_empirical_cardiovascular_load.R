@@ -1,32 +1,45 @@
 # ============================================================
-# Fig3_Baseline_Referenced_CV_Load.R  (FULL REPLACEMENT)
+# 03_figure3_empirical_cardiovascular_load.R
 #
 # PURPOSE
-#   Produce Figure 3 – Baseline-referenced cardiovascular load
-#   from the FINAL validated MASTER datasets.
+#   Generate Figure 3 for the npj Digital Medicine manuscript:
 #
-# KEY ANALYTIC RULE
-#   Baseline is person-day specific and constant within day.
-#   Therefore, for each p_id × day_num, we construct one daily baseline
-#   from bl_hr (median across rows of that subject-day), and use that
-#   constant value throughout the day.
+#     From Instantaneous Heart Rate to Long-Horizon
+#     Cardiovascular Burden in Naturalistic Daily Life
+#
+#   The script computes and visualizes baseline-referenced
+#   cardiovascular load in driving and non-driving sedentary
+#   contexts.
+#
+# ANALYTIC DEFINITION
+#   Normalized heart rate (NHR) is defined as:
+#
+#     NHR = raw_hr - participant-day baseline HR
+#
+#   Baseline HR is treated as participant-day specific and
+#   constant within study day. For each p_id x day_num, the
+#   script constructs one daily baseline from bl_hr and uses
+#   that value throughout the day.
 #
 # PANEL DEFINITIONS
 #   A. Distribution of NHR
-#      where NHR = raw_hr - day baseline
-#
-#   B. % time NHR > 0
-#      computed within subject and context, then averaged across subjects
-#
+#   B. Percent time with NHR > 0
 #   C. Within-subject variability of NHR
-#      SD(NHR) computed within subject and context; bars show
-#      mean subject-level SD and error bars show 5–95% subject band
 #
-# INPUTS
-#   Data/NUBI_Data_<RES>sec_Level_MASTER_CLEAN.csv
+# INPUT
+#   Data/NUBI_Data_60sec_Level_MASTER_CLEAN.csv
 #
-# OUTPUTS
-#   Results/paper_figs/<timestamp>_<RES>sec_Figure3_CV_Load/
+# REQUIRED ACTIVITY LABELS
+#   activity3 == "driving"
+#   activity3 == "non_driving_sedentary"
+#
+# MAJOR OUTPUTS
+#   The script writes Figure 3 and supporting summaries under:
+#
+#     Results/paper_figs/<timestamp>_60sec_figure3_empirical_cardiovascular_load/
+#
+#   Main outputs:
+#
 #     Figures/Figure3_CV_Load.pdf
 #     Figures/Figure3_CV_Load.png
 #     figure3_analysis_data.csv
@@ -36,6 +49,15 @@
 #     figure3_day_baseline_summary.csv
 #     figure3_day_baseline_diagnostics.csv
 #     run_log.txt
+#
+# REPOSITORY SCOPE
+#   This public repository starts from the curated analysis-ready
+#   60-second dataset. It does not reconstruct the dataset from
+#   raw wearable, smartphone, vehicle, or ground-truth streams.
+#
+# PRIVACY NOTE
+#   Direct GPS coordinate columns are removed from the public
+#   dataset and are not required for this figure.
 # ============================================================
 
 suppressPackageStartupMessages({
@@ -101,40 +123,63 @@ if (!is.na(this_script) && file.exists(this_script)) {
 }
 message("Working directory (Scripts): ", getwd())
 
-project_root <- normalizePath(file.path(getwd(), ".."), mustWork = FALSE)
+project_root <- normalizePath(file.path(getwd(), ".."), mustWork = TRUE)
 
 # ----------------------------
-# RESOLUTION PICKER
+# Resolution picker
 # ----------------------------
-pick_resolution <- function() {
-  cat("\nChoose dataset resolution:\n",
-      "  1) 10 sec\n",
-      "  2) 30 sec\n",
-      "  3) 60 sec\n", sep = "")
-  ans <- readline("Enter 10 / 30 / 60 (or 1/2/3): ")
-  ans <- trimws(ans)
+# The public repository currently includes the curated 60-second dataset:
+#
+#   Data/NUBI_Data_60sec_Level_MASTER_CLEAN.csv
+#
+# The picker is retained so the same script can be reused if 10-sec or
+# 30-sec analysis datasets are added later.
+
+pick_resolution <- function(default = 60L) {
+  cat(
+    "\nChoose dataset resolution:\n",
+    "  1) 10 sec  [requires Data/NUBI_Data_10sec_Level_MASTER_CLEAN.csv]\n",
+    "  2) 30 sec  [requires Data/NUBI_Data_30sec_Level_MASTER_CLEAN.csv]\n",
+    "  3) 60 sec  [included in this repository]\n",
+    sep = ""
+  )
   
+  ans <- trimws(readline(
+    sprintf("Enter 10 / 30 / 60 (or 1/2/3). Press Enter for %d sec: ", default)
+  ))
+  
+  if (ans == "") return(as.integer(default))
   if (ans %in% c("1", "10")) return(10L)
   if (ans %in% c("2", "30")) return(30L)
   if (ans %in% c("3", "60")) return(60L)
   
   stop("Invalid entry: ", ans, " (expected 10/30/60 or 1/2/3)")
 }
-RES_SECONDS <- pick_resolution()
+
+RES_SECONDS <- pick_resolution(default = 60L)
 
 in_path <- file.path(
   project_root, "Data",
   sprintf("NUBI_Data_%dsec_Level_MASTER_CLEAN.csv", RES_SECONDS)
 )
-stopifnot(file.exists(in_path))
+if (!file.exists(in_path)) {
+  stop(
+    "Dataset not found: ", in_path, "\n",
+    "The public repository currently includes only the 60-second dataset. ",
+    "Use 60 sec, or add the corresponding ", RES_SECONDS,
+    "-second dataset under Data/."
+  )
+}
 
 # ----------------------------
 # OUTPUT FOLDER
 # ----------------------------
 stamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
 out_dir <- file.path(
-  project_root, "Results", "paper_figs",
-  paste0(stamp, "_", RES_SECONDS, "sec_Figure3_CV_Load")
+  project_root,
+  "Results",
+  "paper_figs",
+  paste0(stamp, "_", RES_SECONDS, "sec_figure3_empirical_cardiovascular_load")
 )
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
@@ -171,7 +216,8 @@ safe_save_png <- function(plot_obj, path, w = 7, h = 5, dpi = 300) {
   ggsave(filename = path, plot = plot_obj, width = w, height = h, dpi = dpi)
 }
 
-log_msg("Figure3 script start")
+log_msg("Script: 03_figure3_empirical_cardiovascular_load.R")
+log_msg("Figure 3 empirical cardiovascular load analysis start")
 log_msg("Resolution: ", RES_SECONDS, " sec")
 log_msg("Input: ", in_path)
 log_msg("Output: ", out_dir)

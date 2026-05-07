@@ -1,39 +1,83 @@
 # ============================================================
-# Figure8_HorizonScaling_RAWHR.R  (FULL REPLACEMENT)
+# 08_figure8_horizon_scaling_rawhr.R
 #
 # PURPOSE
-#   Build Figure 8 for the paper:
-#     "Error scaling with observational horizon"
+#   Generate Figure 8 for the npj Digital Medicine manuscript:
 #
-#   Uses:
-#     Data/NUBI_Data_<RES>sec_Level_MASTER_CLEAN.csv
-#     Results/nubi_ml/<latest matching v12+ run for chosen RES>/
-#       predictions_all_models_both_strata.csv
+#     From Instantaneous Heart Rate to Long-Horizon
+#     Cardiovascular Burden in Naturalistic Daily Life
 #
-# MAIN IDEA
-#   For ENet predictions, quantify how prediction error in RAW_HR changes
-#   when residuals are averaged over longer temporal horizons.
+#   The script quantifies how ENet RAW_HR prediction error changes
+#   when residuals are averaged over progressively longer temporal
+#   horizons.
 #
-# MAIN FIGURE
-#   All strata
-#   RAW_HR residuals only
+# ANALYTIC DEFINITION
+#   Figure 8 evaluates horizon scaling of prediction error using
+#   ENet out-of-fold RAW_HR residuals:
 #
-# COMPANION OUTPUT
-#   Horizon metrics tables
-#   Log-log slope table
-#   Reduction summary table
-#   Caption-friendly numbers
+#     residual = RAW_HR_observed - RAW_HR_predicted
 #
-# KEY IMPROVEMENTS VS PRIOR VERSION
-#   - Interactive resolution picker: 10 / 30 / 60 sec
-#   - RAW_HR only (drops redundant NHR)
-#   - Auto-detects newest matching ML run for chosen resolution
-#   - Prefers highest detected ML version (so v12 over v11 automatically)
-#   - Writes block-count diagnostics so long horizons can be judged honestly
-#   - Removes inverse-square-root benchmark from plots and tables
+#   Residuals are grouped into contiguous within-subject temporal
+#   blocks at multiple averaging horizons. The main figure shows
+#   normalized RMSE of block-mean residuals versus averaging horizon.
 #
-# OUTPUT
-#   Results/paper_figs/<timestamp>_<RES>sec_Figure8_HorizonScaling_RAWHR/
+# PANEL DEFINITION
+#   Main figure:
+#     RAW_HR residual horizon scaling for DRIVING and
+#     NONDRIVING_SEDENTARY strata.
+#
+# INPUT
+#   1) Final clean MASTER dataset:
+#
+#        Data/NUBI_Data_<RES>sec_Level_MASTER_CLEAN.csv
+#
+#   2) Existing ML output folder under:
+#
+#        Results/nubi_ml/<RUN_FOLDER>/
+#
+#      Expected file:
+#
+#        predictions_all_models_both_strata.csv
+#
+# MAJOR OUTPUTS
+#   The script writes Figure 8 and horizon-scaling diagnostics under:
+#
+#     Results/paper_figs/<timestamp>_<RES>sec_figure8_horizon_scaling_rawhr/
+#
+#   Main outputs:
+#
+#     Figure8_HorizonScaling_RAWHR.pdf
+#     Figure8_HorizonScaling_RAWHR.png
+#     Figure8_HorizonScaling_LogLogDiagnostic.pdf
+#     Figure8_HorizonScaling_LogLogDiagnostic.png
+#     Figure8_block_means_long.csv
+#     Figure8_block_counts_by_horizon.csv
+#     Figure8_horizon_metrics_long.csv
+#     Figure8_loglog_slopes.csv
+#     Figure8_reduction_summary.csv
+#     Figure8_caption_numbers.csv
+#     diagnostics_rowmap_DRIVING.csv
+#     diagnostics_rowmap_NONDRIVING_SEDENTARY.csv
+#     diagnostics_joined_prediction_sample.csv
+#     diagnostics_segments.csv
+#     diagnostics_segment_summary.csv
+#
+# REPOSITORY SCOPE
+#   This public repository starts from the final clean MASTER
+#   dataset and curated out-of-fold model predictions. It does not
+#   retrain the full upstream machine-learning pipeline from raw
+#   wearable, smartphone, vehicle, or ground-truth streams.
+#
+# PRIVACY NOTE
+#   This script uses curated model predictions and timestamped rows.
+#   It does not require direct GPS coordinates or raw location traces.
+#
+# NOTES
+#   - RAW_HR residuals are used; NHR residuals are intentionally not
+#     duplicated here.
+#   - Sparse horizons are retained in outputs and marked in the plot.
+#   - The inverse-square-root benchmark is intentionally omitted from
+#     plots and tables.
 # ============================================================
 
 suppressPackageStartupMessages({
@@ -54,10 +98,15 @@ options(warn = 1)
 # ----------------------------
 LOCAL_TZ <- "America/Chicago"
 USE_COMMON_SUBJECTS <- TRUE
-AUTO_DETECT_ML_RUN <- TRUE
 
-# Only used if AUTO_DETECT_ML_RUN = FALSE
-ML_RUN_FOLDER_MANUAL <- "Results/nubi_ml/REPLACE_WITH_REAL_FOLDER"
+# Use exact folder name inside Results/nubi_ml, or leave NULL to auto-pick
+# the newest run folder for the chosen resolution containing the required
+# Figure 8 prediction file.
+RUN_DIR_NAME <- NULL
+
+# Optional extra filter when auto-picking. Leave blank for public GitHub use,
+# because downloaded/copied run folders may have different timestamped names.
+RUN_DIR_SUFFIX_REGEX <- ""
 
 MODEL_KEEP <- "enet"
 
@@ -78,26 +127,34 @@ COL_NOND    <- "#7F7F7F"
 # ----------------------------
 # Project root
 # ----------------------------
-this_file <- tryCatch(normalizePath(sys.frames()[[1]]$ofile), error = function(e) NA_character_)
-if (is.na(this_file)) stop("Could not locate script path (sys.frames()[[1]]$ofile).")
+this_file <- tryCatch(normalizePath(sys.frame(1)$ofile), error = function(e) NA_character_)
 
-PROJECT_ROOT <- dirname(dirname(this_file))
+if (!is.na(this_file) && file.exists(this_file)) {
+  PROJECT_ROOT <- dirname(dirname(this_file))
+} else {
+  PROJECT_ROOT <- normalizePath(file.path(getwd(), ".."), mustWork = FALSE)
+}
+
 setwd(PROJECT_ROOT)
 message("Working directory set to PROJECT_ROOT: ", normalizePath(getwd()))
 
 # ============================================================
 # Helpers
 # ============================================================
-pick_resolution <- function() {
+pick_resolution <- function(default = 60L) {
   cat(
     "\nChoose dataset resolution:\n",
-    "  1) 10 sec\n",
-    "  2) 30 sec\n",
-    "  3) 60 sec\n",
+    "  1) 10 sec  [requires matching MASTER data and ML predictions]\n",
+    "  2) 30 sec  [requires matching MASTER data and ML predictions]\n",
+    "  3) 60 sec  [manuscript/public-repository default]\n",
     sep = ""
   )
-  ans <- trimws(readline("Enter 10 / 30 / 60 (or 1/2/3): "))
   
+  ans <- trimws(readline(
+    sprintf("Enter 10 / 30 / 60 (or 1/2/3). Press Enter for %d sec: ", default)
+  ))
+  
+  if (ans == "") return(as.integer(default))
   if (ans %in% c("1", "10")) return(10L)
   if (ans %in% c("2", "30")) return(30L)
   if (ans %in% c("3", "60")) return(60L)
@@ -245,53 +302,55 @@ fit_loglog <- function(df_metric) {
   )
 }
 
-extract_version_num <- function(x) {
-  x_low <- tolower(x)
-  m <- stringr::str_match(x_low, "v([0-9]+)")
-  out <- suppressWarnings(as.numeric(m[, 2]))
-  ifelse(is.na(out), -Inf, out)
-}
+required_fig8_files <- c(
+  "predictions_all_models_both_strata.csv"
+)
 
-find_latest_ml_dir <- function(res_seconds) {
-  base_dir <- file.path("Results", "nubi_ml")
-  if (!dir.exists(base_dir)) stop("Missing Results/nubi_ml directory.")
+find_latest_ml_dir <- function(res_seconds, suffix_regex = "") {
+  base_dir <- file.path(PROJECT_ROOT, "Results", "nubi_ml")
+  if (!dir.exists(base_dir)) stop("Missing Results/nubi_ml directory: ", base_dir)
   
   all_dirs <- list.dirs(base_dir, recursive = FALSE, full.names = TRUE)
-  if (length(all_dirs) == 0) stop("No run folders found under Results/nubi_ml/")
+  all_dirs <- all_dirs[file.info(all_dirs)$isdir %in% TRUE]
   
-  bn <- basename(all_dirs)
+  if (length(all_dirs) == 0) {
+    stop("No run folders found under: ", base_dir)
+  }
   
   res_pat <- paste0("(^|[^0-9])", res_seconds, "sec([^0-9]|$)")
   
-  hits <- all_dirs[
-    grepl(res_pat, bn, ignore.case = TRUE, perl = TRUE) &
-      grepl("compare_drive_vs_nondrive", bn, ignore.case = TRUE, perl = TRUE) &
-      grepl("directrawhr", bn, ignore.case = TRUE, perl = TRUE) &
-      grepl("importance", bn, ignore.case = TRUE, perl = TRUE) &
-      grepl("noaffine", bn, ignore.case = TRUE, perl = TRUE)
-  ]
+  has_res <- grepl(res_pat, basename(all_dirs), ignore.case = TRUE, perl = TRUE)
   
-  if (length(hits) == 0) {
-    message("Folders found under Results/nubi_ml/:")
-    print(bn)
-    stop("No matching ", res_seconds, "sec ML run folder found.")
+  has_required <- vapply(
+    all_dirs,
+    function(d) all(file.exists(file.path(d, required_fig8_files))),
+    logical(1)
+  )
+  
+  cand <- all_dirs[has_res & has_required]
+  
+  if (!is.null(suffix_regex) && nzchar(suffix_regex)) {
+    cand <- cand[grepl(suffix_regex, basename(cand), ignore.case = TRUE)]
   }
   
-  rank_df <- data.frame(
-    path = hits,
-    version_num = extract_version_num(basename(hits)),
-    mtime = file.info(hits)$mtime,
-    stringsAsFactors = FALSE
-  ) %>%
-    arrange(desc(version_num), desc(mtime))
+  if (length(cand) == 0) {
+    stop(
+      "Could not find an ML run folder under Results/nubi_ml/ containing all Figure 8 inputs for ",
+      res_seconds, " sec.\n",
+      "Required files:\n  ",
+      paste(required_fig8_files, collapse = "\n  "),
+      "\n\nAvailable folders:\n  ",
+      paste(basename(list.dirs(base_dir, recursive = FALSE, full.names = TRUE)), collapse = "\n  ")
+    )
+  }
   
-  rank_df$path[1]
+  cand[which.max(file.info(cand)$mtime)]
 }
 
 # ============================================================
 # Resolution
 # ============================================================
-RES_SECONDS <- pick_resolution()
+RES_SECONDS <- pick_resolution(default = 60L)
 
 DATA_PATH <- file.path("Data", sprintf("NUBI_Data_%dsec_Level_MASTER_CLEAN.csv", RES_SECONDS))
 if (!file.exists(DATA_PATH)) stop("Missing input data file: ", DATA_PATH)
@@ -302,7 +361,7 @@ if (!file.exists(DATA_PATH)) stop("Missing input data file: ", DATA_PATH)
 timestamp_tag <- format(Sys.time(), "%Y%m%d_%H%M%S")
 out_dir <- file.path(
   "Results", "paper_figs",
-  paste0(timestamp_tag, "_", RES_SECONDS, "sec_Figure8_HorizonScaling_RAWHR")
+  paste0(timestamp_tag, "_", RES_SECONDS, "sec_figure8_horizon_scaling_rawhr")
 )
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 message("Writing outputs to: ", normalizePath(out_dir))
@@ -310,21 +369,25 @@ message("Writing outputs to: ", normalizePath(out_dir))
 # ============================================================
 # Resolve ML directory
 # ============================================================
-if (AUTO_DETECT_ML_RUN) {
-  ML_DIR <- normalizePath(find_latest_ml_dir(RES_SECONDS), mustWork = TRUE)
-  message("AUTO_DETECT_ML_RUN = TRUE")
-  message("Using latest ML_DIR: ", ML_DIR)
-} else {
-  ML_DIR <- normalizePath(ML_RUN_FOLDER_MANUAL, mustWork = FALSE)
-  if (!dir.exists(ML_DIR)) {
-    message("Folders found under Results/nubi_ml/:")
-    print(list.files(file.path("Results", "nubi_ml")))
-    stop("ML_RUN_FOLDER_MANUAL does not exist: ", ML_RUN_FOLDER_MANUAL)
-  }
-  ML_DIR <- normalizePath(ML_DIR, mustWork = TRUE)
-  message("AUTO_DETECT_ML_RUN = FALSE")
-  message("Using manual ML_DIR: ", ML_DIR)
+nubi_ml_root <- file.path(PROJECT_ROOT, "Results", "nubi_ml")
+if (!dir.exists(nubi_ml_root)) {
+  stop("Missing Results/nubi_ml directory: ", nubi_ml_root)
 }
+
+if (!is.null(RUN_DIR_NAME)) {
+  ML_DIR <- file.path(nubi_ml_root, RUN_DIR_NAME)
+  if (!dir.exists(ML_DIR)) {
+    stop("Specified RUN_DIR_NAME does not exist: ", ML_DIR)
+  }
+} else {
+  ML_DIR <- find_latest_ml_dir(
+    RES_SECONDS,
+    suffix_regex = RUN_DIR_SUFFIX_REGEX
+  )
+}
+
+ML_DIR <- normalizePath(ML_DIR, mustWork = TRUE)
+message("Using ML_DIR: ", ML_DIR)
 
 PRED_PATH <- file.path(ML_DIR, "predictions_all_models_both_strata.csv")
 if (!file.exists(PRED_PATH)) stop("Missing prediction file: ", PRED_PATH)
