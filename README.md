@@ -39,9 +39,9 @@ The repository is intended for manuscript reproducibility from the curated final
 │   ├── 04_figure4_context_tax.R
 │   ├── 05_figure5_prediction_decomposition.R
 │   ├── 06_figure6_enet_modulators.R
-│   ├── 07_figure7_enet_horizon_simulation.R
-│   ├── 08_figure8_horizon_scaling_rawhr.R
-│   └── Fig_Supplement_Activity3_MultiRes.R
+│   ├── 07_figure7_long_horizon_simulation.R
+│   ├── 08_figure8_horizon_scaling_raw_hr.R
+│   └── s01_supplement_activity3_participant_traces.R
 │
 ├── DATA_USE.md
 ├── LICENSE
@@ -164,9 +164,9 @@ source("Scripts/03_figure3_model_performance.R", echo = TRUE)
 source("Scripts/04_figure4_context_tax.R", echo = TRUE)
 source("Scripts/05_figure5_prediction_decomposition.R", echo = TRUE)
 source("Scripts/06_figure6_enet_modulators.R", echo = TRUE)
-source("Scripts/07_figure7_enet_horizon_simulation.R", echo = TRUE)
-source("Scripts/08_figure8_horizon_scaling_rawhr.R", echo = TRUE)
-source("Scripts/Fig_Supplement_Activity3_MultiRes.R", echo = TRUE)
+source("Scripts/07_figure7_long_horizon_simulation.R", echo = TRUE)
+source("Scripts/08_figure8_horizon_scaling_raw_hr.R", echo = TRUE)
+source("Scripts/s01_supplement_activity3_participant_traces.R", echo = TRUE)
 ```
 
 Several scripts ask interactively which dataset resolution to use:
@@ -287,7 +287,7 @@ Results/paper_figs/<timestamp>_<RES>sec_figure6_enet_modulators/
 Script:
 
 ```text
-Scripts/07_figure7_enet_horizon_simulation.R
+Scripts/07_figure7_long_horizon_simulation.R
 ```
 
 Purpose:
@@ -335,7 +335,7 @@ Results/paper_figs/<timestamp>_<RES>sec_figure7_enet_horizon_weather_trait/
 Script:
 
 ```text
-Scripts/08_figure8_horizon_scaling_rawhr.R
+Scripts/08_figure8_horizon_scaling_raw_hr.R
 ```
 
 Purpose:
@@ -379,7 +379,7 @@ Results/paper_figs/<timestamp>_<RES>sec_figure8_horizon_scaling_rawhr/
 Script:
 
 ```text
-Scripts/Fig_Supplement_Activity3_MultiRes.R
+Scripts/s01_supplement_activity3_participant_traces.R
 ```
 
 Purpose:
