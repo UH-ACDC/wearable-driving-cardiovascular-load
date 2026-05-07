@@ -58,6 +58,7 @@ This filename is retained from the original analysis workflow so that the public
 
 The dataset includes the validated 60-second observations used in the manuscript analyses, including participant identifiers, timestamps, study-day labels, heart-rate variables, behavioral context labels, baseline heart rate, driving-related variables, temporal/contextual variables, and participant-level covariates.
 
+
 ## Script map
 
 | Manuscript item | Script | Description |
@@ -72,6 +73,7 @@ The dataset includes the validated 60-second observations used in the manuscript
 | Figure 7 | `Scripts/07_figure7_long_horizon_simulation.R` | Runs long-horizon cardiovascular-burden simulations and generates annual cumulative NHR-hour summaries. |
 | Figure 8 | `Scripts/08_figure8_horizon_scaling_raw_hr.R` | Computes horizon-scaling error metrics and generates the robustness analysis for increasing temporal aggregation windows. |
 | Supplementary figure | `Scripts/s01_supplement_activity3_participant_traces.R` | Generates supplementary participant-level heart-rate traces and supporting diagnostics. |
+
 
 ## Recommended run order
 
