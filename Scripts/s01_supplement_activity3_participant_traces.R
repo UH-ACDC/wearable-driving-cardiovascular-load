@@ -1,0 +1,631 @@
+# ============================================================
+# Fig_Supplement_Activity3_MultiRes.R  (FULL REPLACEMENT)
+#
+# PURPOSE
+#   Multipage supplementary figure from one of:
+#     Data/NUBI_Data_10sec_Level_MASTER_CLEAN.csv
+#     Data/NUBI_Data_30sec_Level_MASTER_CLEAN.csv
+#     Data/NUBI_Data_60sec_Level_MASTER_CLEAN.csv
+#
+#   The script asks interactively which resolution to use: 10 / 30 / 60 sec.
+#
+#   One panel per subject, N subjects per page.
+#   Raw HR is colored by activity3:
+#     - driving                         -> orange
+#     - non_driving_sedentary          -> black
+#     - non_driving_physical_activity  -> green
+#   Baseline HR is shown in red.
+#
+#   X-axis:
+#     STUDY-DAY placement over a fixed 7-slot layout:
+#       day1 = slot 1 (0-24h), day2 = slot 2 (24-48h), ..., day7 = slot 7
+#
+# IMPORTANT
+#   - Timestamps in `time` are treated as local clock time in America/Chicago.
+#   - day_num is treated as the PRIMARY study-day key.
+#   - Day1..Day7 are weekday-coded study-day labels, NOT necessarily
+#     consecutive calendar dates.
+#   - Missing grid points are inserted within each study-day slot based on the
+#     chosen resolution so line breaks appear correctly.
+#
+# REQUIRED COLUMNS
+#   p_id, time, raw_hr, bl_hr, activity3, day_num
+#
+# OUTPUT
+#   Results/paper_figs/<timestamp>_<RES>sec_Supplementary_Figure_activity3/Figures/Supplementary_Figure.pdf
+#   plus run log and diagnostics
+# ============================================================
+
+suppressPackageStartupMessages({
+  library(data.table)
+  library(lubridate)
+  library(stringr)
+  library(ggplot2)
+  library(patchwork)
+})
+
+options(warn = 1)
+
+# ----------------------------
+# USER SETTINGS
+# ----------------------------
+LOCAL_TZ <- "America/Chicago"
+
+subjects_per_page <- 3
+x_break_by <- 6
+use_global_y <- TRUE
+
+KEEP_DAYS <- 7L
+X_END_HRS <- 24 * KEEP_DAYS
+
+# Expected labels in activity3
+ACT3_DRIVING <- "driving"
+ACT3_ND_SED  <- "non_driving_sedentary"
+ACT3_ND_PA   <- "non_driving_physical_activity"
+
+# Colors
+COL_DRIVE <- "orange"
+COL_SED   <- "black"
+COL_ACT   <- "springgreen3"
+COL_BASE  <- "red"
+
+PAL_STATE <- c(
+  "DRIVING" = COL_DRIVE,
+  "NONDRIVING_SEDENTARY" = COL_SED,
+  "NONDRIVING_PHYSICAL_ACTIVITY" = COL_ACT
+)
+
+# ----------------------------
+# Robust wd = Scripts/
+# ----------------------------
+this_script <- tryCatch(normalizePath(sys.frame(1)$ofile), error = function(e) NA_character_)
+if (!is.na(this_script) && file.exists(this_script)) {
+  setwd(dirname(this_script))
+}
+message("Working directory (Scripts): ", getwd())
+
+project_root <- normalizePath(file.path(getwd(), ".."), mustWork = FALSE)
+
+# ----------------------------
+# Interactive resolution choice
+# ----------------------------
+choose_resolution <- function() {
+  cat("\nAvailable resolutions: 10, 30, 60 seconds\n")
+  ans <- readline(prompt = "Enter desired resolution (10/30/60): ")
+  ans <- trimws(ans)
+  
+  if (!ans %in% c("10", "30", "60")) {
+    stop("Invalid choice. Please enter exactly one of: 10, 30, 60.")
+  }
+  as.integer(ans)
+}
+
+RES_SECONDS <- choose_resolution()
+
+# Break lines across time gaps > 2 expected bins
+gap_threshold_secs <- 2L * RES_SECONDS
+
+# ----------------------------
+# Input file map
+# ----------------------------
+file_map <- c(
+  "10" = "NUBI_Data_10sec_Level_MASTER_CLEAN.csv",
+  "30" = "NUBI_Data_30sec_Level_MASTER_CLEAN.csv",
+  "60" = "NUBI_Data_60sec_Level_MASTER_CLEAN.csv"
+)
+
+in_file <- unname(file_map[as.character(RES_SECONDS)])
+in_path <- file.path(project_root, "Data", in_file)
+
+if (!file.exists(in_path)) {
+  stop("Chosen input file does not exist: ", in_path)
+}
+
+# ----------------------------
+# Output folders
+# ----------------------------
+stamp   <- format(Sys.time(), "%Y%m%d_%H%M%S")
+out_dir <- file.path(
+  project_root, "Results", "paper_figs",
+  paste0(stamp, "_", RES_SECONDS, "sec_Supplementary_Figure_activity3")
+)
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+fig_dir <- file.path(out_dir, "Figures")
+dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+
+diag_dir <- file.path(out_dir, "Diagnostics")
+dir.create(diag_dir, recursive = TRUE, showWarnings = FALSE)
+
+out_pdf   <- file.path(fig_dir, "Supplementary_Figure.pdf")
+log_file  <- file.path(out_dir, "run_log.txt")
+
+# ----------------------------
+# Logging helpers
+# ----------------------------
+log_msg <- function(...) {
+  msg <- paste0(format(Sys.time(), "%Y-%m-%d %H:%M:%S"), " | ", paste(..., collapse = ""))
+  message(msg)
+  cat(msg, "\n", file = log_file, append = TRUE)
+}
+
+open_pdf <- function(path, width, height) {
+  if (capabilities("cairo")) {
+    grDevices::cairo_pdf(path, width = width, height = height, onefile = TRUE)
+  } else {
+    grDevices::pdf(path, width = width, height = height, onefile = TRUE, useDingbats = FALSE)
+  }
+}
+
+pad_range <- function(r, frac = 0.06) {
+  if (length(r) != 2 || any(!is.finite(r))) return(c(0, 1))
+  span <- diff(r)
+  if (!is.finite(span) || span <= 0) return(r + c(-1, 1))
+  r + c(-1, 1) * span * frac
+}
+
+clock_labels_7day <- function(x) {
+  out <- character(length(x))
+  
+  near_end <- abs(x - (X_END_HRS - RES_SECONDS / 3600)) < 1e-9
+  out[near_end] <- "24:00\n7"
+  
+  xx <- x[!near_end]
+  day_idx <- floor(xx / 24) + 1
+  h <- ((xx %% 24) + 24) %% 24
+  hh <- floor(h)
+  mm <- round((h - hh) * 60)
+  mm[mm == 60] <- 0
+  hh[hh == 24] <- 0
+  hhmm <- sprintf("%02d:%02d", hh, mm)
+  out[!near_end] <- paste0(hhmm, "\n", day_idx)
+  
+  out
+}
+
+norm_chr <- function(x) {
+  trimws(tolower(as.character(x)))
+}
+
+parse_time_local <- function(x, tz = LOCAL_TZ) {
+  if (inherits(x, "POSIXt")) return(force_tz(x, tzone = tz))
+  
+  x <- as.character(x)
+  x2 <- sub("Z$", "", x)
+  
+  tt <- suppressWarnings(ymd_hms(x2, tz = tz, quiet = TRUE))
+  if (sum(!is.na(tt)) > 0) return(tt)
+  
+  suppressWarnings(parse_date_time(
+    x2,
+    orders = c(
+      "ymd HMS", "ymd HM",
+      "mdy HMS", "mdy HM",
+      "dmy HMS", "dmy HM",
+      "ymd HMSOS", "mdy HMSOS", "dmy HMSOS"
+    ),
+    tz = tz
+  ))
+}
+
+pid_sort_key <- function(pid_chr) {
+  pid_chr <- as.character(pid_chr)
+  dig <- suppressWarnings(as.integer(str_extract(pid_chr, "\\d+")))
+  dig[is.na(dig)] <- 1e9L
+  dig
+}
+
+mode_chr <- function(x) {
+  x <- as.character(x)
+  x <- x[!is.na(x)]
+  if (!length(x)) return(NA_character_)
+  tab <- sort(table(x), decreasing = TRUE)
+  names(tab)[1]
+}
+
+state_from_activity3 <- function(activity3_vec) {
+  a <- norm_chr(activity3_vec)
+  out <- ifelse(
+    a == ACT3_DRIVING, "DRIVING",
+    ifelse(a == ACT3_ND_PA, "NONDRIVING_PHYSICAL_ACTIVITY", "NONDRIVING_SEDENTARY")
+  )
+  factor(out,
+         levels = c("DRIVING", "NONDRIVING_SEDENTARY", "NONDRIVING_PHYSICAL_ACTIVITY"))
+}
+
+parse_day_num <- function(x) {
+  x <- tolower(trimws(as.character(x)))
+  x[x %in% c("", "na", "n/a", "null")] <- NA_character_
+  out <- suppressWarnings(as.integer(str_extract(x, "\\d+")))
+  out[!(out %in% 1:7)] <- NA_integer_
+  out
+}
+
+write_diag_table <- function(dt, path) {
+  fwrite(dt, path)
+}
+
+make_page_header <- function(pg, n_pg) {
+  leg <- data.frame(
+    x = c(0.02, 0.30, 0.63),
+    y = c(0.25, 0.25, 0.25),
+    col = c(COL_DRIVE, COL_SED, COL_ACT),
+    lab = c("Driving", "Non-driving sedentary", "Non-driving physical activity")
+  )
+  
+  ggplot() +
+    theme_void(base_size = 11) +
+    annotate("text", x = 0, y = 0.98, hjust = 0, vjust = 1,
+             size = 5, fontface = "bold", label = "Supplementary Figure") +
+    annotate("text", x = 1, y = 0.98, hjust = 1, vjust = 1,
+             size = 3.8,
+             label = paste0("Resolution: ", RES_SECONDS, " sec | Page ", pg, " of ", n_pg)) +
+    annotate("text", x = 0, y = 0.83, hjust = 0, vjust = 1,
+             size = 3.6,
+             label = paste0(
+               "Raw HR colored by activity3 (", RES_SECONDS,
+               "-sec). Baseline in red. X-axis uses study-day slots day1..day7; missing samples are blank."
+             )) +
+    geom_point(data = leg, aes(x = x, y = y), color = leg$col, size = 3.2, inherit.aes = FALSE) +
+    geom_text(data = leg, aes(x = x + 0.03, y = y, label = lab),
+              hjust = 0, vjust = 0.5, size = 3.4, inherit.aes = FALSE) +
+    geom_segment(aes(x = 0.86, xend = 0.92, y = 0.25, yend = 0.25),
+                 color = COL_BASE, linewidth = 1.1, inherit.aes = FALSE) +
+    geom_text(aes(x = 0.93, y = 0.25, label = "Baseline"),
+              hjust = 0, vjust = 0.5, size = 3.4, inherit.aes = FALSE) +
+    coord_cartesian(xlim = c(0, 1), ylim = c(0, 1), clip = "off")
+}
+
+make_subject_plot <- function(dsub, subject_label, global_y = NULL) {
+  setorder(dsub, x_hr, dt_time)
+  
+  dsub[, `:=`(
+    dx_hr = x_hr - shift(x_hr, 1)
+  )]
+  
+  gap_threshold_hours <- gap_threshold_secs / 3600
+  
+  dsub[, new_seg := is.na(dx_hr) |
+         (dx_hr < 0) |
+         (dx_hr > gap_threshold_hours) |
+         (state != shift(state, 1)) |
+         (is.na(raw_hr) != shift(is.na(raw_hr), 1))
+  ]
+  dsub[, seg_id := cumsum(new_seg)]
+  
+  if (!is.null(global_y) && all(is.finite(global_y))) {
+    y_lim <- global_y
+  } else {
+    y_vals <- c(dsub$raw_hr, dsub$baseline_hr)
+    y_vals <- y_vals[is.finite(y_vals)]
+    y_lim <- if (length(y_vals) > 0) pad_range(range(y_vals)) else c(0, 1)
+  }
+  
+  ggplot(as.data.frame(dsub), aes(x = x_hr)) +
+    geom_line(
+      aes(y = raw_hr, color = state, group = seg_id),
+      linewidth = 0.40, lineend = "round", na.rm = TRUE
+    ) +
+    geom_line(
+      aes(y = baseline_hr, group = seg_id),
+      color = COL_BASE, linewidth = 0.60, lineend = "round", na.rm = TRUE
+    ) +
+    scale_color_manual(values = PAL_STATE, drop = FALSE) +
+    scale_x_continuous(
+      breaks = c(
+        seq(0, X_END_HRS - x_break_by, by = x_break_by),
+        X_END_HRS - RES_SECONDS / 3600
+      ),
+      labels = clock_labels_7day,
+      expand = c(0, 0)
+    ) +
+    coord_cartesian(
+      xlim = c(0, X_END_HRS - RES_SECONDS / 3600),
+      ylim = y_lim
+    ) +
+    labs(title = subject_label, x = NULL, y = "HR [bpm]") +
+    theme_minimal(base_size = 9) +
+    theme(
+      plot.title = element_text(face = "bold", size = 10, hjust = 0),
+      legend.position = "none",
+      panel.grid.minor = element_blank(),
+      plot.margin = margin(2, 6, 2, 6)
+    )
+}
+
+fill_missing_grid_one_subject <- function(d, step_secs) {
+  setorder(d, day_num_int, dt_time)
+  
+  slots <- 1:KEEP_DAYS
+  out_list <- vector("list", length(slots))
+  
+  for (ii in seq_along(slots)) {
+    dd <- slots[ii]
+    d_day <- d[day_num_int == dd]
+    
+    full <- data.table(
+      sec_of_day = seq(0, 24 * 3600 - step_secs, by = step_secs)
+    )
+    full[, `:=`(
+      p_id = d$p_id[1],
+      day_num_int = dd
+    )]
+    
+    if (nrow(d_day) > 0) {
+      tmp <- copy(d_day[, .(p_id, day_num_int, sec_of_day, dt_time, raw_hr, baseline_hr, state)])
+      out <- merge(
+        full, tmp,
+        by = c("p_id", "day_num_int", "sec_of_day"),
+        all.x = TRUE, sort = TRUE
+      )
+    } else {
+      out <- copy(full)
+      out[, `:=`(
+        dt_time = as.POSIXct(NA),
+        raw_hr = NA_real_,
+        baseline_hr = NA_real_,
+        state = factor(NA_character_, levels = c("DRIVING","NONDRIVING_SEDENTARY","NONDRIVING_PHYSICAL_ACTIVITY"))
+      )]
+    }
+    
+    out[!is.finite(raw_hr), `:=`(baseline_hr = NA_real_, state = NA)]
+    out_list[[ii]] <- out
+  }
+  
+  rbindlist(out_list, use.names = TRUE, fill = TRUE)
+}
+
+main <- function() {
+  log_msg("Supplementary multipage PDF start (activity3)")
+  log_msg("Chosen resolution: ", RES_SECONDS, " sec")
+  log_msg("Input: ", in_path)
+  log_msg("Output dir: ", out_dir)
+  log_msg("Writing PDF: ", out_pdf)
+  
+  dt <- fread(in_path, showProgress = TRUE)
+  log_msg("Rows read: ", format(nrow(dt), big.mark = ","))
+  log_msg("Columns read: ", ncol(dt))
+  
+  need <- c("p_id", "time", "raw_hr", "bl_hr", "activity3", "day_num")
+  miss <- setdiff(need, names(dt))
+  if (length(miss) > 0) {
+    stop("Missing required columns: ", paste(miss, collapse = ", "))
+  }
+  
+  dt[, p_id := as.character(p_id)]
+  dt[, time := as.character(time)]
+  dt[, dt_time := parse_time_local(time, tz = LOCAL_TZ)]
+  
+  n_bad_time <- dt[is.na(dt_time), .N]
+  if (n_bad_time > 0) {
+    log_msg("Rows with unparseable time removed: ", n_bad_time)
+  }
+  dt <- dt[!is.na(dt_time)]
+  
+  dt[, raw_hr := suppressWarnings(as.numeric(raw_hr))]
+  dt[, baseline_hr := suppressWarnings(as.numeric(bl_hr))]
+  dt[, activity3_norm := norm_chr(activity3)]
+  dt[, state := state_from_activity3(activity3_norm)]
+  dt[, day_num_int := parse_day_num(day_num)]
+  
+  bad_daynum <- dt[is.na(day_num_int), .N]
+  if (bad_daynum > 0) {
+    log_msg("Rows with invalid day_num removed: ", bad_daynum)
+  }
+  dt <- dt[!is.na(day_num_int)]
+  
+  dt[!is.finite(raw_hr), baseline_hr := NA_real_]
+  
+  # Time within study-day slot
+  dt[, sec_of_day := hour(dt_time) * 3600L + minute(dt_time) * 60L + second(dt_time)]
+  dt[, x_hr := 24 * (day_num_int - 1L) + sec_of_day / 3600]
+  
+  state_counts <- dt[, .N, by = .(activity3_norm)][order(-N)]
+  write_diag_table(state_counts, file.path(diag_dir, "activity3_counts.csv"))
+  
+  subj_summary <- dt[, .(
+    n_rows = .N,
+    n_study_days_present = uniqueN(day_num_int),
+    min_day_num = min(day_num_int, na.rm = TRUE),
+    max_day_num = max(day_num_int, na.rm = TRUE),
+    time_min = min(dt_time, na.rm = TRUE),
+    time_max = max(dt_time, na.rm = TRUE),
+    n_raw_missing = sum(!is.finite(raw_hr)),
+    n_bl_missing = sum(!is.finite(baseline_hr))
+  ), by = p_id][order(p_id)]
+  write_diag_table(subj_summary, file.path(diag_dir, "subject_summary_before_fill.csv"))
+  
+  dup_check <- dt[, .N, by = .(p_id, dt_time)][N > 1]
+  write_diag_table(dup_check, file.path(diag_dir, "duplicate_pid_time_rows.csv"))
+  log_msg("Duplicate (p_id, dt_time) rows: ", nrow(dup_check))
+  
+  if (nrow(dup_check) > 0) {
+    log_msg("Collapsing duplicate (p_id, dt_time) rows.")
+    dt <- dt[, .(
+      raw_hr = if (all(!is.finite(raw_hr))) NA_real_ else mean(raw_hr, na.rm = TRUE),
+      baseline_hr = if (all(!is.finite(baseline_hr))) NA_real_ else mean(baseline_hr, na.rm = TRUE),
+      state = factor(mode_chr(state), levels = levels(dt$state)),
+      day_num = mode_chr(day_num),
+      day_num_int = suppressWarnings(as.integer(mode_chr(day_num_int))),
+      sec_of_day = suppressWarnings(as.integer(round(mean(sec_of_day, na.rm = TRUE)))),
+      x_hr = mean(x_hr, na.rm = TRUE)
+    ), by = .(p_id, dt_time)]
+  }
+  
+  setorder(dt, p_id, day_num_int, dt_time)
+  
+  # Diagnostics for study-day coverage in slots 1..7
+  subj_summary_slots <- dt[, .(
+    n_rows_in_slots = .N,
+    days_present = paste(sort(unique(day_num_int)), collapse = ","),
+    first_time = min(dt_time, na.rm = TRUE),
+    last_time = max(dt_time, na.rm = TRUE)
+  ), by = p_id][order(p_id)]
+  write_diag_table(subj_summary_slots, file.path(diag_dir, "subject_summary_study_day_slots.csv"))
+  
+  # ----------------------------
+  # Baseline diagnostics by STUDY DAY (primary)
+  # ----------------------------
+  baseline_study_day_level <- dt[, .(
+    n_rows_observed = .N,
+    any_raw_hr = any(is.finite(raw_hr)),
+    any_baseline = any(is.finite(baseline_hr)),
+    n_nonmiss_baseline_rows = sum(is.finite(baseline_hr)),
+    n_unique_baseline_values = uniqueN(baseline_hr[is.finite(baseline_hr)]),
+    baseline_values_seen = paste(sort(unique(baseline_hr[is.finite(baseline_hr)])), collapse = ";")
+  ), by = .(p_id, day_num, day_num_int)][order(p_id, day_num_int)]
+  
+  baseline_study_day_level[, baseline_study_day_missing := any_raw_hr & !any_baseline]
+  baseline_study_day_level[, baseline_study_day_inconsistent := n_unique_baseline_values > 1]
+  
+  write_diag_table(
+    baseline_study_day_level,
+    file.path(diag_dir, "baseline_subject_study_day_level.csv")
+  )
+  
+  baseline_study_subject_summary <- baseline_study_day_level[, .(
+    n_study_days_present = .N,
+    n_study_days_with_any_raw_hr = sum(any_raw_hr),
+    n_study_days_with_any_baseline = sum(any_baseline),
+    n_study_days_missing_baseline_given_raw = sum(baseline_study_day_missing),
+    n_study_days_inconsistent_baseline = sum(baseline_study_day_inconsistent),
+    pct_study_days_missing_baseline_given_raw =
+      round(100 * sum(baseline_study_day_missing) / pmax(sum(any_raw_hr), 1), 2)
+  ), by = p_id][order(p_id)]
+  
+  write_diag_table(
+    baseline_study_subject_summary,
+    file.path(diag_dir, "baseline_subject_study_day_summary.csv")
+  )
+  
+  baseline_study_overall_summary <- baseline_study_day_level[, .(
+    n_subject_study_days = .N,
+    n_subject_study_days_with_any_raw_hr = sum(any_raw_hr),
+    n_subject_study_days_with_any_baseline = sum(any_baseline),
+    n_subject_study_days_missing_baseline_given_raw = sum(baseline_study_day_missing),
+    n_subject_study_days_inconsistent_baseline = sum(baseline_study_day_inconsistent),
+    pct_subject_study_days_missing_baseline_given_raw =
+      round(100 * sum(baseline_study_day_missing) / pmax(sum(any_raw_hr), 1), 2)
+  )]
+  
+  write_diag_table(
+    baseline_study_overall_summary,
+    file.path(diag_dir, "baseline_study_day_overall_summary.csv")
+  )
+  
+  # ----------------------------
+  # Baseline diagnostics by CALENDAR DATE (secondary)
+  # ----------------------------
+  dt[, date_day := as.Date(dt_time, tz = LOCAL_TZ)]
+  
+  baseline_calendar_day_level <- dt[, .(
+    n_rows_observed = .N,
+    any_raw_hr = any(is.finite(raw_hr)),
+    any_baseline = any(is.finite(baseline_hr)),
+    n_nonmiss_baseline_rows = sum(is.finite(baseline_hr)),
+    n_unique_baseline_values = uniqueN(baseline_hr[is.finite(baseline_hr)]),
+    baseline_values_seen = paste(sort(unique(baseline_hr[is.finite(baseline_hr)])), collapse = ";")
+  ), by = .(p_id, date_day)][order(p_id, date_day)]
+  
+  baseline_calendar_day_level[, baseline_calendar_day_missing := any_raw_hr & !any_baseline]
+  baseline_calendar_day_level[, baseline_calendar_day_inconsistent := n_unique_baseline_values > 1]
+  
+  write_diag_table(
+    baseline_calendar_day_level,
+    file.path(diag_dir, "baseline_subject_calendar_day_level.csv")
+  )
+  
+  baseline_calendar_subject_summary <- baseline_calendar_day_level[, .(
+    n_calendar_days_present = .N,
+    n_calendar_days_with_any_raw_hr = sum(any_raw_hr),
+    n_calendar_days_with_any_baseline = sum(any_baseline),
+    n_calendar_days_missing_baseline_given_raw = sum(baseline_calendar_day_missing),
+    n_calendar_days_inconsistent_baseline = sum(baseline_calendar_day_inconsistent),
+    pct_calendar_days_missing_baseline_given_raw =
+      round(100 * sum(baseline_calendar_day_missing) / pmax(sum(any_raw_hr), 1), 2)
+  ), by = p_id][order(p_id)]
+  
+  write_diag_table(
+    baseline_calendar_subject_summary,
+    file.path(diag_dir, "baseline_subject_calendar_day_summary.csv")
+  )
+  
+  baseline_calendar_overall_summary <- baseline_calendar_day_level[, .(
+    n_subject_calendar_days = .N,
+    n_subject_calendar_days_with_any_raw_hr = sum(any_raw_hr),
+    n_subject_calendar_days_with_any_baseline = sum(any_baseline),
+    n_subject_calendar_days_missing_baseline_given_raw = sum(baseline_calendar_day_missing),
+    n_subject_calendar_days_inconsistent_baseline = sum(baseline_calendar_day_inconsistent),
+    pct_subject_calendar_days_missing_baseline_given_raw =
+      round(100 * sum(baseline_calendar_day_missing) / pmax(sum(any_raw_hr), 1), 2)
+  )]
+  
+  write_diag_table(
+    baseline_calendar_overall_summary,
+    file.path(diag_dir, "baseline_calendar_day_overall_summary.csv")
+  )
+  
+  # ----------------------------
+  # Fill missing grid WITHIN each study-day slot 1..7
+  # ----------------------------
+  dt_filled <- rbindlist(
+    lapply(split(dt, dt$p_id), fill_missing_grid_one_subject, step_secs = RES_SECONDS),
+    use.names = TRUE, fill = TRUE
+  )
+  setorder(dt_filled, p_id, day_num_int, sec_of_day)
+  
+  dt_filled[, x_hr := 24 * (day_num_int - 1L) + sec_of_day / 3600]
+  
+  fill_diag <- dt_filled[, .(
+    n_total_points = .N,
+    n_missing_raw = sum(!is.finite(raw_hr)),
+    pct_missing_raw = round(100 * mean(!is.finite(raw_hr)), 2)
+  ), by = p_id][order(p_id)]
+  write_diag_table(fill_diag, file.path(diag_dir, "missingness_after_fill.csv"))
+  
+  global_y <- NULL
+  if (use_global_y) {
+    y_vals <- c(dt_filled$raw_hr, dt_filled$baseline_hr)
+    y_vals <- y_vals[is.finite(y_vals)]
+    if (length(y_vals) > 0) {
+      global_y <- pad_range(range(y_vals))
+      log_msg("Global y-axis: [", round(global_y[1], 2), ", ", round(global_y[2], 2), "]")
+    }
+  }
+  
+  subj_tbl <- data.table(p_id = unique(dt_filled$p_id))
+  subj_tbl[, pid_num := pid_sort_key(p_id)]
+  setorder(subj_tbl, pid_num, p_id)
+  subjects <- subj_tbl$p_id
+  
+  log_msg("Unique subjects: ", length(subjects))
+  
+  subject_chunks <- split(subjects, ceiling(seq_along(subjects) / subjects_per_page))
+  n_pages <- length(subject_chunks)
+  log_msg("Pages to write: ", n_pages)
+  
+  open_pdf(out_pdf, width = 11, height = 8.5)
+  on.exit(grDevices::dev.off(), add = TRUE)
+  
+  for (pg in seq_along(subject_chunks)) {
+    ss <- subject_chunks[[pg]]
+    log_msg("Writing page ", pg, " / ", n_pages, " | Subjects: ", paste(ss, collapse = ", "))
+    
+    header <- make_page_header(pg, n_pages)
+    
+    plots <- lapply(ss, function(s) {
+      make_subject_plot(
+        dsub = copy(dt_filled[p_id == s]),
+        subject_label = as.character(s),
+        global_y = global_y
+      )
+    })
+    
+    body <- wrap_plots(plots, ncol = 1)
+    print(header / body + plot_layout(heights = c(2.0, 6.5)))
+  }
+  
+  log_msg("DONE. PDF written to: ", out_pdf)
+}
+
+main()

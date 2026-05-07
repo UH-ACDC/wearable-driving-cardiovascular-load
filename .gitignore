@@ -1,0 +1,21 @@
+# R session files
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+
+# macOS / Windows system files
+.DS_Store
+Thumbs.db
+
+# Generated outputs
+Results/
+
+# Logs and temporary outputs
+*.log
+*.Rout
+*.Rcheck/
+
+# Temporary files
+*.tmp
+*.bak
