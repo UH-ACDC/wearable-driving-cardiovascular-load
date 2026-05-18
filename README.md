@@ -1,10 +1,12 @@
-# npj Digital Medicine HR Prediction
+# Wearable Driving Cardiovascular Load
 
 This repository contains the analysis code and curated data products for the manuscript:
 
-**From Instantaneous Heart Rate to Long-Horizon Cardiovascular Burden in Naturalistic Daily Life**
+**Wearable sensing reveals cumulative cardiovascular load from everyday driving**
 
 The project analyzes heart-rate dynamics in naturalistic daily life, with emphasis on driving and non-driving sedentary contexts. It uses curated participant-level wearable and contextual features to evaluate baseline-referenced cardiovascular load, machine-learning prediction of raw heart rate, context-level cardiovascular tax, and long-horizon cumulative exposure.
+
+The repository supports reproducibility of the manuscript submitted to **npj Digital Public Health**.
 
 ---
 
@@ -500,8 +502,9 @@ Use of the curated dataset is governed separately by [`DATA_USE.md`](DATA_USE.md
 Please cite the associated manuscript when using this repository:
 
 ```text
-From Instantaneous Heart Rate to Long-Horizon Cardiovascular Burden in Naturalistic Daily Life
-npj Digital Medicine
+Bouzid Y, Hasan MT, Manser M, Pavlidis I.
+Wearable sensing reveals cumulative cardiovascular load from everyday driving.
+Submitted to npj Digital Public Health.
 ```
 
 Full citation details should be updated after publication.
