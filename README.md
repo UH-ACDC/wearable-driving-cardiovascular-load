@@ -36,7 +36,7 @@ The repository is intended for manuscript reproducibility from the curated final
 ├── Scripts/
 │   ├── 00_run_predictive_decomposition.R
 │   ├── 01_figure1_participant_level_timeseries.R
-│   ├── 02_figure2_baseline_and_tax.R
+│   ├── 02_figure2_representative_trace.R
 │   ├── 03_figure3_model_performance.R
 │   ├── 04_figure4_context_tax.R
 │   ├── 05_figure5_prediction_decomposition.R
@@ -161,7 +161,7 @@ Then run the manuscript figure scripts:
 
 ```r
 source("Scripts/01_figure1_participant_level_timeseries.R", echo = TRUE)
-source("Scripts/02_figure2_baseline_and_tax.R", echo = TRUE)
+source("Scripts/02_figure2_representative_trace.R", echo = TRUE)
 source("Scripts/03_figure3_model_performance.R", echo = TRUE)
 source("Scripts/04_figure4_context_tax.R", echo = TRUE)
 source("Scripts/05_figure5_prediction_decomposition.R", echo = TRUE)
