@@ -1,16 +1,16 @@
 # ============================================================
-# Fig_Supplement_Activity3_MultiRes.R
+# s01_supplement_activity3_participant_traces.R
 #
 # PURPOSE
 #   Generate a multipage supplementary figure for the npj Digital
 #   Medicine manuscript:
 #
-#     From Instantaneous Heart Rate to Long-Horizon
-#     Cardiovascular Burden in Naturalistic Daily Life
+#     Wearable sensing reveals cumulative cardiovascular load
+#     from everyday driving
 #
 #   The figure visualizes participant-level heart-rate time series
-#   across the 7 study-day slots, with raw HR colored by activity3
-#   state and baseline HR overlaid.
+#   across the 7 study-day slots, with raw HR colored by behavioral
+#   context and baseline HR overlaid.
 #
 # DATA SOURCE
 #   One final clean MASTER dataset selected interactively:
@@ -22,10 +22,21 @@
 #   Pressing Enter at the resolution prompt uses the 60-sec
 #   manuscript/public-repository default.
 #
+# IMPORTANT COLUMN NOTE
+#   The MASTER dataset contains both:
+#
+#     activity  = two-class label: driving / not_driving
+#     activity3 = three-class label:
+#                 driving
+#                 non_driving_sedentary
+#                 non_driving_physical_activity
+#
+#   This figure MUST use activity3, not activity.
+#
 # PANEL DEFINITION
 #   One subject per panel, with multiple subjects per page.
 #
-#   Raw HR is colored by activity3:
+#   Raw HR is colored by behavioral context derived from activity3:
 #
 #     driving                         -> orange
 #     non_driving_sedentary           -> black
@@ -36,10 +47,10 @@
 # X-AXIS DEFINITION
 #   The x-axis uses study-day placement over a fixed 7-slot layout:
 #
-#     day1 = slot 1, 0-24 h
-#     day2 = slot 2, 24-48 h
+#     day1 = Monday slot, 0-24 h
+#     day2 = Tuesday slot, 24-48 h
 #     ...
-#     day7 = slot 7, 144-168 h
+#     day7 = Sunday slot, 144-168 h
 #
 #   day_num is treated as the primary study-day key. Day1..Day7 are
 #   weekday-coded study-day labels and are not assumed to be
@@ -75,6 +86,8 @@
 #   Diagnostics:
 #
 #     Diagnostics/activity3_counts.csv
+#     Diagnostics/mapped_state_counts.csv
+#     Diagnostics/unrecognized_activity3_labels.csv, only if needed
 #     Diagnostics/subject_summary_before_fill.csv
 #     Diagnostics/duplicate_pid_time_rows.csv
 #     Diagnostics/subject_summary_study_day_slots.csv
@@ -120,16 +133,17 @@ use_global_y <- TRUE
 KEEP_DAYS <- 7L
 X_END_HRS <- 24 * KEEP_DAYS
 
-# Expected labels in activity3
-ACT3_DRIVING <- "driving"
-ACT3_ND_SED  <- "non_driving_sedentary"
-ACT3_ND_PA   <- "non_driving_physical_activity"
-
 # Colors
 COL_DRIVE <- "orange"
 COL_SED   <- "black"
 COL_ACT   <- "springgreen3"
 COL_BASE  <- "red"
+
+STATE_LEVELS <- c(
+  "DRIVING",
+  "NONDRIVING_SEDENTARY",
+  "NONDRIVING_PHYSICAL_ACTIVITY"
+)
 
 PAL_STATE <- c(
   "DRIVING" = COL_DRIVE,
@@ -213,7 +227,7 @@ out_pdf   <- file.path(fig_dir, "Supplementary_Figure.pdf")
 log_file  <- file.path(out_dir, "run_log.txt")
 
 # ----------------------------
-# Logging helpers
+# Helpers
 # ----------------------------
 snakeify <- function(x) {
   x <- tolower(x)
@@ -229,18 +243,52 @@ canonicalize_names <- function(dt) {
   old <- names(dt)
   sn  <- snakeify(old)
   
+  # Important:
+  # The dataset contains both:
+  #   activity  = driving / not_driving
+  #   activity3 = driving / non_driving_sedentary / non_driving_physical_activity
+  #
+  # For this figure, preserve the true activity3 column.
+  # Do NOT canonicalize activity -> activity3 when activity3 is present.
+  
   canon <- c(
-    p_id="p_id", pid="p_id", participant_id="p_id", participantid="p_id",
-    time="time", timestamp="time", datetime="time", date_time="time",
-    raw_hr="raw_hr", hr="raw_hr",
-    bl_hr="bl_hr", baseline_hr="bl_hr", hr_bl="bl_hr", hrbl="bl_hr",
-    activity3="activity3", activity_3="activity3",
-    day_num="day_num", daynum="day_num", days="day_num"
+    p_id = "p_id",
+    pid = "p_id",
+    participant_id = "p_id",
+    participantid = "p_id",
+    
+    time = "time",
+    timestamp = "time",
+    datetime = "time",
+    date_time = "time",
+    
+    raw_hr = "raw_hr",
+    hr = "raw_hr",
+    
+    bl_hr = "bl_hr",
+    baseline_hr = "bl_hr",
+    hr_bl = "bl_hr",
+    hrbl = "bl_hr",
+    
+    activity3 = "activity3",
+    activity_3 = "activity3",
+    
+    day_num = "day_num",
+    daynum = "day_num",
+    days = "day_num"
   )
   
   new <- sn
   hit <- sn %in% names(canon)
   new[hit] <- unname(canon[sn[hit]])
+  
+  # Fallback only for older files that lack activity3 entirely.
+  # This should NOT trigger for the current MASTER file.
+  has_activity3 <- any(new == "activity3")
+  if (!has_activity3 && any(sn %in% c("activity", "activity_type", "context"))) {
+    idx <- which(sn %in% c("activity", "activity_type", "context"))[1]
+    new[idx] <- "activity3"
+  }
   
   if (!identical(old, new)) {
     new <- make.unique(new, sep = "_")
@@ -294,6 +342,12 @@ norm_chr <- function(x) {
   trimws(tolower(as.character(x)))
 }
 
+activity_key <- function(x) {
+  x <- trimws(tolower(as.character(x)))
+  x <- gsub("[^a-z0-9]+", "", x)
+  x
+}
+
 parse_time_local <- function(x, tz = LOCAL_TZ) {
   if (inherits(x, "POSIXt")) return(force_tz(x, tzone = tz))
   
@@ -331,13 +385,15 @@ mode_chr <- function(x) {
 }
 
 state_from_activity3 <- function(activity3_vec) {
-  a <- norm_chr(activity3_vec)
-  out <- ifelse(
-    a == ACT3_DRIVING, "DRIVING",
-    ifelse(a == ACT3_ND_PA, "NONDRIVING_PHYSICAL_ACTIVITY", "NONDRIVING_SEDENTARY")
-  )
-  factor(out,
-         levels = c("DRIVING", "NONDRIVING_SEDENTARY", "NONDRIVING_PHYSICAL_ACTIVITY"))
+  k <- activity_key(activity3_vec)
+  
+  out <- rep(NA_character_, length(k))
+  
+  out[k == "driving"] <- "DRIVING"
+  out[k == "nondrivingsedentary"] <- "NONDRIVING_SEDENTARY"
+  out[k == "nondrivingphysicalactivity"] <- "NONDRIVING_PHYSICAL_ACTIVITY"
+  
+  factor(out, levels = STATE_LEVELS)
 }
 
 parse_day_num <- function(x) {
@@ -362,33 +418,72 @@ make_page_header <- function(pg, n_pg) {
   
   ggplot() +
     theme_void(base_size = 11) +
-    annotate("text", x = 0, y = 0.98, hjust = 0, vjust = 1,
-             size = 5, fontface = "bold", label = "Supplementary Figure") +
-    annotate("text", x = 1, y = 0.98, hjust = 1, vjust = 1,
-             size = 3.8,
-             label = paste0("Resolution: ", RES_SECONDS, " sec | Page ", pg, " of ", n_pg)) +
-    annotate("text", x = 0, y = 0.83, hjust = 0, vjust = 1,
-             size = 3.6,
-             label = paste0(
-               "Raw HR colored by activity3 (", RES_SECONDS,
-               "-sec). Baseline in red. X-axis uses study-day slots day1..day7; missing samples are blank."
-             )) +
-    geom_point(data = leg, aes(x = x, y = y), color = leg$col, size = 3.2, inherit.aes = FALSE) +
-    geom_text(data = leg, aes(x = x + 0.03, y = y, label = lab),
-              hjust = 0, vjust = 0.5, size = 3.4, inherit.aes = FALSE) +
-    geom_segment(aes(x = 0.86, xend = 0.92, y = 0.25, yend = 0.25),
-                 color = COL_BASE, linewidth = 1.1, inherit.aes = FALSE) +
-    geom_text(aes(x = 0.93, y = 0.25, label = "Baseline"),
-              hjust = 0, vjust = 0.5, size = 3.4, inherit.aes = FALSE) +
+    annotate(
+      "text",
+      x = 0,
+      y = 0.98,
+      hjust = 0,
+      vjust = 1,
+      size = 5,
+      fontface = "bold",
+      label = "Supplementary Figure"
+    ) +
+    annotate(
+      "text",
+      x = 1,
+      y = 0.98,
+      hjust = 1,
+      vjust = 1,
+      size = 3.8,
+      label = paste0("Resolution: ", RES_SECONDS, " sec | Page ", pg, " of ", n_pg)
+    ) +
+    annotate(
+      "text",
+      x = 0,
+      y = 0.83,
+      hjust = 0,
+      vjust = 1,
+      size = 3.6,
+      label = paste0(
+        "Raw HR colored by behavioral context (", RES_SECONDS,
+        "-sec). Baseline in red. X-axis uses study-day slots day1..day7; missing samples are blank."
+      )
+    ) +
+    geom_point(
+      data = leg,
+      aes(x = x, y = y),
+      color = leg$col,
+      size = 3.2,
+      inherit.aes = FALSE
+    ) +
+    geom_text(
+      data = leg,
+      aes(x = x + 0.03, y = y, label = lab),
+      hjust = 0,
+      vjust = 0.5,
+      size = 3.4,
+      inherit.aes = FALSE
+    ) +
+    geom_segment(
+      aes(x = 0.86, xend = 0.92, y = 0.25, yend = 0.25),
+      color = COL_BASE,
+      linewidth = 1.1,
+      inherit.aes = FALSE
+    ) +
+    geom_text(
+      aes(x = 0.93, y = 0.25, label = "Baseline"),
+      hjust = 0,
+      vjust = 0.5,
+      size = 3.4,
+      inherit.aes = FALSE
+    ) +
     coord_cartesian(xlim = c(0, 1), ylim = c(0, 1), clip = "off")
 }
 
 make_subject_plot <- function(dsub, subject_label, global_y = NULL) {
   setorder(dsub, x_hr, dt_time)
   
-  dsub[, `:=`(
-    dx_hr = x_hr - shift(x_hr, 1)
-  )]
+  dsub[, dx_hr := x_hr - shift(x_hr, 1)]
   
   gap_threshold_hours <- gap_threshold_secs / 3600
   
@@ -411,11 +506,16 @@ make_subject_plot <- function(dsub, subject_label, global_y = NULL) {
   ggplot(as.data.frame(dsub), aes(x = x_hr)) +
     geom_line(
       aes(y = raw_hr, color = state, group = seg_id),
-      linewidth = 0.40, lineend = "round", na.rm = TRUE
+      linewidth = 0.40,
+      lineend = "round",
+      na.rm = TRUE
     ) +
     geom_line(
       aes(y = baseline_hr, group = seg_id),
-      color = COL_BASE, linewidth = 0.60, lineend = "round", na.rm = TRUE
+      color = COL_BASE,
+      linewidth = 0.60,
+      lineend = "round",
+      na.rm = TRUE
     ) +
     scale_color_manual(values = PAL_STATE, drop = FALSE) +
     scale_x_continuous(
@@ -459,11 +559,22 @@ fill_missing_grid_one_subject <- function(d, step_secs) {
     )]
     
     if (nrow(d_day) > 0) {
-      tmp <- copy(d_day[, .(p_id, day_num_int, sec_of_day, dt_time, raw_hr, baseline_hr, state)])
+      tmp <- copy(d_day[, .(
+        p_id,
+        day_num_int,
+        sec_of_day,
+        dt_time,
+        raw_hr,
+        baseline_hr,
+        state
+      )])
+      
       out <- merge(
-        full, tmp,
+        full,
+        tmp,
         by = c("p_id", "day_num_int", "sec_of_day"),
-        all.x = TRUE, sort = TRUE
+        all.x = TRUE,
+        sort = TRUE
       )
     } else {
       out <- copy(full)
@@ -471,11 +582,17 @@ fill_missing_grid_one_subject <- function(d, step_secs) {
         dt_time = as.POSIXct(NA),
         raw_hr = NA_real_,
         baseline_hr = NA_real_,
-        state = factor(NA_character_, levels = c("DRIVING","NONDRIVING_SEDENTARY","NONDRIVING_PHYSICAL_ACTIVITY"))
+        state = factor(NA_character_, levels = STATE_LEVELS)
       )]
     }
     
-    out[!is.finite(raw_hr), `:=`(baseline_hr = NA_real_, state = NA)]
+    # Blank baseline and state at inserted grid points so missing data are
+    # visually blank rather than showing a red baseline line across gaps.
+    out[!is.finite(raw_hr), `:=`(
+      baseline_hr = NA_real_,
+      state = factor(NA_character_, levels = STATE_LEVELS)
+    )]
+    
     out_list[[ii]] <- out
   }
   
@@ -483,7 +600,7 @@ fill_missing_grid_one_subject <- function(d, step_secs) {
 }
 
 main <- function() {
-  log_msg("Supplementary multipage PDF start (activity3)")
+  log_msg("Supplementary multipage PDF start")
   log_msg("Chosen resolution: ", RES_SECONDS, " sec")
   log_msg("Input: ", in_path)
   log_msg("Output dir: ", out_dir)
@@ -498,7 +615,7 @@ main <- function() {
   need <- c("p_id", "time", "raw_hr", "bl_hr", "activity3", "day_num")
   miss <- setdiff(need, names(dt))
   if (length(miss) > 0) {
-    stop("Missing required columns: ", paste(miss, collapse = ", "))
+    stop("Missing required columns after canonicalization: ", paste(miss, collapse = ", "))
   }
   
   dt[, p_id := as.character(p_id)]
@@ -514,7 +631,43 @@ main <- function() {
   dt[, raw_hr := suppressWarnings(as.numeric(raw_hr))]
   dt[, baseline_hr := suppressWarnings(as.numeric(bl_hr))]
   dt[, activity3_norm := norm_chr(activity3)]
+  dt[, activity3_key := activity_key(activity3)]
+  
+  # Confirm we are using the true three-class activity3 column.
+  state_counts <- dt[, .N, by = .(activity3_norm, activity3_key)][order(-N)]
+  write_diag_table(state_counts, file.path(diag_dir, "activity3_counts.csv"))
+  print(state_counts)
+  
   dt[, state := state_from_activity3(activity3_norm)]
+  
+  bad_activity <- dt[is.na(state), .N]
+  if (bad_activity > 0) {
+    bad_activity_labels <- dt[is.na(state), .N, by = .(activity3_norm, activity3_key)][order(-N)]
+    write_diag_table(
+      bad_activity_labels,
+      file.path(diag_dir, "unrecognized_activity3_labels.csv")
+    )
+    
+    print(bad_activity_labels)
+    stop(
+      "Unrecognized activity3 labels found. ",
+      "See Diagnostics/unrecognized_activity3_labels.csv. ",
+      "Add these labels to state_from_activity3() before generating the figure."
+    )
+  }
+  
+  mapped_state_counts <- dt[, .N, by = state][order(state)]
+  write_diag_table(
+    mapped_state_counts,
+    file.path(diag_dir, "mapped_state_counts.csv")
+  )
+  print(mapped_state_counts)
+  
+  log_msg(
+    "Mapped state counts: ",
+    paste(mapped_state_counts$state, mapped_state_counts$N, sep = "=", collapse = "; ")
+  )
+  
   dt[, day_num_int := parse_day_num(day_num)]
   
   bad_daynum <- dt[is.na(day_num_int), .N]
@@ -523,14 +676,18 @@ main <- function() {
   }
   dt <- dt[!is.na(day_num_int)]
   
+  # Do not show baseline where raw HR is missing.
   dt[!is.finite(raw_hr), baseline_hr := NA_real_]
   
-  # Time within study-day slot
+  # Time within study-day slot.
   dt[, sec_of_day := hour(dt_time) * 3600L + minute(dt_time) * 60L + second(dt_time)]
-  dt[, x_hr := 24 * (day_num_int - 1L) + sec_of_day / 3600]
+  dt[, sec_of_day := as.integer(sec_of_day)]
   
-  state_counts <- dt[, .N, by = .(activity3_norm)][order(-N)]
-  write_diag_table(state_counts, file.path(diag_dir, "activity3_counts.csv"))
+  # Clamp edge cases to the last bin of the day.
+  dt[sec_of_day >= 24 * 3600, sec_of_day := 24 * 3600 - RES_SECONDS]
+  dt[sec_of_day < 0, sec_of_day := 0L]
+  
+  dt[, x_hr := 24 * (day_num_int - 1L) + sec_of_day / 3600]
   
   subj_summary <- dt[, .(
     n_rows = .N,
@@ -542,38 +699,51 @@ main <- function() {
     n_raw_missing = sum(!is.finite(raw_hr)),
     n_bl_missing = sum(!is.finite(baseline_hr))
   ), by = p_id][order(p_id)]
-  write_diag_table(subj_summary, file.path(diag_dir, "subject_summary_before_fill.csv"))
   
-  dup_check <- dt[, .N, by = .(p_id, dt_time)][N > 1]
-  write_diag_table(dup_check, file.path(diag_dir, "duplicate_pid_time_rows.csv"))
-  log_msg("Duplicate (p_id, dt_time) rows: ", nrow(dup_check))
+  write_diag_table(
+    subj_summary,
+    file.path(diag_dir, "subject_summary_before_fill.csv")
+  )
+  
+  dup_check <- dt[, .N, by = .(p_id, day_num_int, sec_of_day)][N > 1]
+  write_diag_table(
+    dup_check,
+    file.path(diag_dir, "duplicate_pid_time_rows.csv")
+  )
+  log_msg("Duplicate (p_id, day_num_int, sec_of_day) rows: ", nrow(dup_check))
   
   if (nrow(dup_check) > 0) {
-    log_msg("Collapsing duplicate (p_id, dt_time) rows.")
+    log_msg("Collapsing duplicate (p_id, day_num_int, sec_of_day) rows.")
+    
     dt <- dt[, .(
+      dt_time = suppressWarnings(min(dt_time, na.rm = TRUE)),
       raw_hr = if (all(!is.finite(raw_hr))) NA_real_ else mean(raw_hr, na.rm = TRUE),
       baseline_hr = if (all(!is.finite(baseline_hr))) NA_real_ else mean(baseline_hr, na.rm = TRUE),
-      state = factor(mode_chr(state), levels = levels(dt$state)),
+      state = factor(mode_chr(state), levels = STATE_LEVELS),
       day_num = mode_chr(day_num),
-      day_num_int = suppressWarnings(as.integer(mode_chr(day_num_int))),
-      sec_of_day = suppressWarnings(as.integer(round(mean(sec_of_day, na.rm = TRUE)))),
       x_hr = mean(x_hr, na.rm = TRUE)
-    ), by = .(p_id, dt_time)]
+    ), by = .(p_id, day_num_int, sec_of_day)]
+    
+    dt[!is.finite(raw_hr), baseline_hr := NA_real_]
   }
   
-  setorder(dt, p_id, day_num_int, dt_time)
+  setorder(dt, p_id, day_num_int, sec_of_day)
   
-  # Diagnostics for study-day coverage in slots 1..7
+  # Diagnostics for study-day coverage in slots 1..7.
   subj_summary_slots <- dt[, .(
     n_rows_in_slots = .N,
     days_present = paste(sort(unique(day_num_int)), collapse = ","),
     first_time = min(dt_time, na.rm = TRUE),
     last_time = max(dt_time, na.rm = TRUE)
   ), by = p_id][order(p_id)]
-  write_diag_table(subj_summary_slots, file.path(diag_dir, "subject_summary_study_day_slots.csv"))
+  
+  write_diag_table(
+    subj_summary_slots,
+    file.path(diag_dir, "subject_summary_study_day_slots.csv")
+  )
   
   # ----------------------------
-  # Baseline diagnostics by STUDY DAY (primary)
+  # Baseline diagnostics by STUDY DAY, primary
   # ----------------------------
   baseline_study_day_level <- dt[, .(
     n_rows_observed = .N,
@@ -581,7 +751,10 @@ main <- function() {
     any_baseline = any(is.finite(baseline_hr)),
     n_nonmiss_baseline_rows = sum(is.finite(baseline_hr)),
     n_unique_baseline_values = uniqueN(baseline_hr[is.finite(baseline_hr)]),
-    baseline_values_seen = paste(sort(unique(baseline_hr[is.finite(baseline_hr)])), collapse = ";")
+    baseline_values_seen = paste(
+      sort(unique(baseline_hr[is.finite(baseline_hr)])),
+      collapse = ";"
+    )
   ), by = .(p_id, day_num, day_num_int)][order(p_id, day_num_int)]
   
   baseline_study_day_level[, baseline_study_day_missing := any_raw_hr & !any_baseline]
@@ -623,7 +796,7 @@ main <- function() {
   )
   
   # ----------------------------
-  # Baseline diagnostics by CALENDAR DATE (secondary)
+  # Baseline diagnostics by CALENDAR DATE, secondary
   # ----------------------------
   dt[, date_day := as.Date(dt_time, tz = LOCAL_TZ)]
   
@@ -633,7 +806,10 @@ main <- function() {
     any_baseline = any(is.finite(baseline_hr)),
     n_nonmiss_baseline_rows = sum(is.finite(baseline_hr)),
     n_unique_baseline_values = uniqueN(baseline_hr[is.finite(baseline_hr)]),
-    baseline_values_seen = paste(sort(unique(baseline_hr[is.finite(baseline_hr)])), collapse = ";")
+    baseline_values_seen = paste(
+      sort(unique(baseline_hr[is.finite(baseline_hr)])),
+      collapse = ";"
+    )
   ), by = .(p_id, date_day)][order(p_id, date_day)]
   
   baseline_calendar_day_level[, baseline_calendar_day_missing := any_raw_hr & !any_baseline]
@@ -675,14 +851,15 @@ main <- function() {
   )
   
   # ----------------------------
-  # Fill missing grid WITHIN each study-day slot 1..7
+  # Fill missing grid within each study-day slot 1..7
   # ----------------------------
   dt_filled <- rbindlist(
     lapply(split(dt, dt$p_id), fill_missing_grid_one_subject, step_secs = RES_SECONDS),
-    use.names = TRUE, fill = TRUE
+    use.names = TRUE,
+    fill = TRUE
   )
-  setorder(dt_filled, p_id, day_num_int, sec_of_day)
   
+  setorder(dt_filled, p_id, day_num_int, sec_of_day)
   dt_filled[, x_hr := 24 * (day_num_int - 1L) + sec_of_day / 3600]
   
   fill_diag <- dt_filled[, .(
@@ -690,12 +867,17 @@ main <- function() {
     n_missing_raw = sum(!is.finite(raw_hr)),
     pct_missing_raw = round(100 * mean(!is.finite(raw_hr)), 2)
   ), by = p_id][order(p_id)]
-  write_diag_table(fill_diag, file.path(diag_dir, "missingness_after_fill.csv"))
+  
+  write_diag_table(
+    fill_diag,
+    file.path(diag_dir, "missingness_after_fill.csv")
+  )
   
   global_y <- NULL
   if (use_global_y) {
     y_vals <- c(dt_filled$raw_hr, dt_filled$baseline_hr)
     y_vals <- y_vals[is.finite(y_vals)]
+    
     if (length(y_vals) > 0) {
       global_y <- pad_range(range(y_vals))
       log_msg("Global y-axis: [", round(global_y[1], 2), ", ", round(global_y[2], 2), "]")
@@ -705,8 +887,8 @@ main <- function() {
   subj_tbl <- data.table(p_id = unique(dt_filled$p_id))
   subj_tbl[, pid_num := pid_sort_key(p_id)]
   setorder(subj_tbl, pid_num, p_id)
-  subjects <- subj_tbl$p_id
   
+  subjects <- subj_tbl$p_id
   log_msg("Unique subjects: ", length(subjects))
   
   subject_chunks <- split(subjects, ceiling(seq_along(subjects) / subjects_per_page))

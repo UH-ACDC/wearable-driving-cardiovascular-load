@@ -364,7 +364,7 @@ make_subject_plot <- function(dsub) {
     scale_color_manual(
       values = PAL_STATE,
       breaks = c("DRIVING", "SEDENTARY_NONDRIVING", "PHYSICAL_ACTIVITY", "Baseline"),
-      labels = c("Driving", "Sedentary non-driving", "Physical activity", "Participant-day baseline"),
+      labels = c("Driving", "Non-driving sedentary", "Physical activity", "Participant-day baseline"),
       drop = FALSE
     ) +
     scale_x_continuous(
